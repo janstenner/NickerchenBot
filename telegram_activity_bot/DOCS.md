@@ -6,6 +6,7 @@ Required:
 
 - `telegram_bot_token` (`password`): Bot token from BotFather.
 - `openai_api_key` (`password`): API key for OpenAI Responses.
+- `openai_model` (`string`, default `gpt-5-mini`): Responses model to use (for example `gpt-5-mini` or `gpt-5.2`).
 
 Optional access control:
 
@@ -43,7 +44,7 @@ Mention behavior:
 
 ## OpenAI policy used
 
-- Responses API with `model="gpt-5.2"`
+- Responses API with configurable `model` (`openai_model`, default `gpt-5-mini`)
 - `store=false`
 - Short outputs (`max_output_tokens` kept small)
 - No tool use, no browsing integration

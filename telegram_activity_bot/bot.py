@@ -81,6 +81,7 @@ def load_options() -> Dict[str, Any]:
     defaults: Dict[str, Any] = {
         "telegram_bot_token": "",
         "openai_api_key": "",
+        "openai_model": "gpt-5-mini",
         "allowed_chat_ids": "",
         "admin_user_ids": "",
         "bot_username": "",
@@ -109,6 +110,7 @@ def load_options() -> Dict[str, Any]:
     merged["allowed_chat_ids"] = parse_csv_ints(str(merged.get("allowed_chat_ids", "")))
     merged["admin_user_ids"] = parse_csv_ints(str(merged.get("admin_user_ids", "")))
     merged["bot_username"] = normalize_bot_username(str(merged.get("bot_username", "")))
+    merged["openai_model"] = str(merged.get("openai_model", "gpt-5-mini")).strip() or "gpt-5-mini"
     merged["style_filename"] = os.path.basename(str(merged.get("style_filename", "style.md")) or "style.md")
 
     merged["style_reload_seconds"] = max(5, int(merged.get("style_reload_seconds", 60)))
@@ -228,6 +230,18 @@ def can_post_now(chat_state: Dict[str, Any], now_ts: int, min_seconds_between_po
     return True
 
 
+def can_post_reply(chat_state: Dict[str, Any], max_posts_per_day: int) -> bool:
+    if max_posts_per_day <= 0:
+        return True
+
+    d = today_utc()
+    if chat_state.get("daily_date") != d:
+        chat_state["daily_date"] = d
+        chat_state["daily_count"] = 0
+
+    return int(chat_state.get("daily_count", 0) or 0) < max_posts_per_day
+
+
 def post_block_reason(
     chat_state: Dict[str, Any],
     now_ts: int,
@@ -246,6 +260,19 @@ def post_block_reason(
             daily_count = int(chat_state.get("daily_count", 0) or 0)
             if daily_count >= max_posts_per_day:
                 return "daily_cap"
+
+    return ""
+
+
+def reply_block_reason(chat_state: Dict[str, Any], max_posts_per_day: int) -> str:
+    if max_posts_per_day <= 0:
+        return ""
+
+    d = today_utc()
+    if chat_state.get("daily_date") == d:
+        daily_count = int(chat_state.get("daily_count", 0) or 0)
+        if daily_count >= max_posts_per_day:
+            return "daily_cap"
 
     return ""
 
@@ -369,6 +396,7 @@ def extract_response_text(response: Any) -> str:
 
 def create_openai_reply(
     client: OpenAI,
+    model: str,
     style_text: str,
     mention_text: str,
     reply_text: str,
@@ -391,7 +419,7 @@ def create_openai_reply(
         prompt += "\n\nReplied-to message:\n" + reply_text
 
     response = client.responses.create(
-        model="gpt-5.2",
+        model=model,
         store=False,
         input=prompt,
         max_output_tokens=140,
@@ -399,7 +427,7 @@ def create_openai_reply(
     return extract_response_text(response)
 
 
-def create_openai_ambient(client: OpenAI, style_text: str, count: int, msgs_per_min: float) -> str:
+def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> str:
     prompt = (
         "You are a concise Telegram group assistant. "
         "Generate exactly one harmless sentence with no assumptions about specific chat content."
@@ -412,7 +440,7 @@ def create_openai_ambient(client: OpenAI, style_text: str, count: int, msgs_per_
     )
 
     response = client.responses.create(
-        model="gpt-5.2",
+        model=model,
         store=False,
         input=prompt,
         max_output_tokens=60,
@@ -516,18 +544,8 @@ def handle_message(
         logging.info("Skip reply chat=%s msg=%d reason=no_mention_or_reply", mask_chat_id(chat_id), msg_id)
         return True
 
-    block_reason = post_block_reason(
-        chat_state,
-        now_ts,
-        options["min_seconds_between_posts"],
-        options["max_posts_per_day"],
-    )
-    if not can_post_now(
-        chat_state,
-        now_ts,
-        options["min_seconds_between_posts"],
-        options["max_posts_per_day"],
-    ):
+    block_reason = reply_block_reason(chat_state, options["max_posts_per_day"])
+    if not can_post_reply(chat_state, options["max_posts_per_day"]):
         logging.info("Skip reply chat=%s msg=%d reason=%s", mask_chat_id(chat_id), msg_id, block_reason or "blocked")
         return True
 
@@ -536,7 +554,7 @@ def handle_message(
 
     try:
         style_text = style_cache.get()
-        response_text = create_openai_reply(client, style_text, text, reply_text)
+        response_text = create_openai_reply(client, options["openai_model"], style_text, text, reply_text)
         if response_text:
             telegram_send_message(
                 options["telegram_bot_token"],
@@ -586,7 +604,7 @@ def maybe_post_ambient(
 
     try:
         style_text = style_cache.get()
-        ambient_text = create_openai_ambient(client, style_text, count, per_min)
+        ambient_text = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
         if ambient_text:
             telegram_send_message(options["telegram_bot_token"], chat_id, ambient_text)
             register_post(chat_state, now_ts)
@@ -639,7 +657,8 @@ def run() -> None:
     else:
         logging.info("Allowed chats empty: tracking all chats")
     logging.info(
-        "Runtime options reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d",
+        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d",
+        options["openai_model"],
         options["reply_on_mention"],
         options["ambient_enabled"],
         options["activity_window_seconds"],
