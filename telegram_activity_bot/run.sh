@@ -1,4 +1,4 @@
 #!/usr/bin/with-contenv bashio
 set -euo pipefail
 
-exec python3 -u /app/bot.py
+exec /opt/venv/bin/python -u /app/bot.py
