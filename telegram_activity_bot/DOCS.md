@@ -6,7 +6,7 @@ Required:
 
 - `telegram_bot_token` (`password`): Bot token from BotFather.
 - `openai_api_key` (`password`): API key for OpenAI Responses.
-- `openai_model` (`string`, default `gpt-5-mini`): Responses model to use (for example `gpt-5-mini` or `gpt-5.2`).
+- `openai_model` (`string`, default `gpt-5.2`): Responses model to use (for example `gpt-5.2` or `gpt-5-mini`).
 
 Optional access control:
 
@@ -42,22 +42,25 @@ Mention behavior:
 - The bot stores numeric activity timestamps only for normal messages.
 - Mention/reply text is used in-memory to generate an immediate response.
 - Mention context is truncated to 1000 chars and replied-to context to 500 chars.
+- Reply context includes sender usernames/IDs for current and replied-to messages.
+- Persistent memory file: `/config/memory.md` (max 2000 chars), included in every reply context.
 
 ## OpenAI policy used
 
-- Responses API with configurable `model` (`openai_model`, default `gpt-5-mini`)
+- Responses API with configurable `model` (`openai_model`, default `gpt-5.2`)
 - `store=false`
 - Short outputs (`max_output_tokens` kept small)
 - No tool use, no browsing integration
 
 ## Style file locations
 
-Provide your style note files in the add-on config directory. With `addon_config` mapping, they are mounted read-only inside the container as `/config`.
+Provide your style note files in the add-on config directory. With `addon_config` mapping, they are mounted read/write inside the container as `/config`.
 
 Default path inside container:
 
 - `/config/style_post.md`
 - `/config/style_reply.md`
+- `/config/memory.md`
 
 ## Troubleshooting
 

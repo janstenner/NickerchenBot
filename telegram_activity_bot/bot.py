@@ -18,8 +18,10 @@ POLL_TIMEOUT_SECONDS = 25
 AMBIENT_TICK_SECONDS = 10
 MAX_ACTIVITY_ENTRIES_PER_CHAT = 10000
 MAX_STYLE_CHARS = 20000
+MAX_MEMORY_CHARS = 5000
 MAX_MENTION_CONTEXT_CHARS = 1000
 MAX_REPLY_CONTEXT_CHARS = 500
+MEMORY_FILENAME = "memory.md"
 
 
 def setup_logging() -> None:
@@ -81,7 +83,7 @@ def load_options() -> Dict[str, Any]:
     defaults: Dict[str, Any] = {
         "telegram_bot_token": "",
         "openai_api_key": "",
-        "openai_model": "gpt-5-mini",
+        "openai_model": "gpt-5.2",
         "allowed_chat_ids": "",
         "admin_user_ids": "",
         "bot_username": "",
@@ -111,7 +113,7 @@ def load_options() -> Dict[str, Any]:
     merged["allowed_chat_ids"] = parse_csv_ints(str(merged.get("allowed_chat_ids", "")))
     merged["admin_user_ids"] = parse_csv_ints(str(merged.get("admin_user_ids", "")))
     merged["bot_username"] = normalize_bot_username(str(merged.get("bot_username", "")))
-    merged["openai_model"] = str(merged.get("openai_model", "gpt-5-mini")).strip() or "gpt-5-mini"
+    merged["openai_model"] = str(merged.get("openai_model", "gpt-5.2")).strip() or "gpt-5.2"
     legacy_style_filename = os.path.basename(str(merged.get("style_filename", "")) or "")
     default_post_style = legacy_style_filename or "style_post.md"
     default_reply_style = legacy_style_filename or "style_reply.md"
@@ -329,6 +331,63 @@ def clamp_text(value: str, max_chars: int) -> str:
     return value[:max_chars]
 
 
+def sender_label(message: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(message, dict):
+        return "unknown"
+    frm = message.get("from")
+    if not isinstance(frm, dict):
+        return "unknown"
+
+    username = frm.get("username")
+    if isinstance(username, str) and username.strip():
+        uname = username.strip()
+        if not uname.startswith("@"):
+            uname = f"@{uname}"
+        return uname
+
+    user_id = frm.get("id")
+    if isinstance(user_id, int):
+        return f"id:{user_id}"
+    return "unknown"
+
+
+def memory_file_path() -> str:
+    return os.path.join(CONFIG_DIR, MEMORY_FILENAME)
+
+
+def load_memory_text() -> str:
+    path = memory_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read(MAX_MEMORY_CHARS + 1)
+        return clamp_text(content, MAX_MEMORY_CHARS).strip()
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:
+        logging.warning("Failed reading memory file: %s", summarize_exception(exc))
+        return ""
+
+
+def save_memory_text(content: str) -> bool:
+    path = memory_file_path()
+    normalized = clamp_text(content or "", MAX_MEMORY_CHARS).strip()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(normalized)
+        return True
+    except Exception as exc:
+        logging.warning("Failed writing memory file: %s", summarize_exception(exc))
+        return False
+
+
+def ensure_memory_file_exists() -> None:
+    path = memory_file_path()
+    if os.path.exists(path):
+        return
+    if save_memory_text(""):
+        logging.info("Created memory file at /config/%s", MEMORY_FILENAME)
+
+
 def is_mention(text: str, bot_username: str) -> bool:
     if not bot_username:
         return False
@@ -453,11 +512,48 @@ def response_incomplete_reason(response: Any) -> str:
     return ""
 
 
+def call_openai_text(
+    client: OpenAI,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    retry_max_tokens: int,
+) -> Tuple[str, str]:
+    response = client.responses.create(
+        model=model,
+        store=False,
+        input=prompt,
+        reasoning={"effort": "minimal"},
+        max_output_tokens=max_tokens,
+    )
+    text = extract_response_text(response)
+    if text:
+        return text, response_debug_meta(response)
+
+    if response_incomplete_reason(response) == "max_output_tokens" and retry_max_tokens > max_tokens:
+        retry = client.responses.create(
+            model=model,
+            store=False,
+            input=prompt,
+            reasoning={"effort": "minimal"},
+            max_output_tokens=retry_max_tokens,
+        )
+        retry_text = extract_response_text(retry)
+        if retry_text:
+            return retry_text, response_debug_meta(retry)
+        return "", response_debug_meta(retry)
+
+    return "", response_debug_meta(response)
+
+
 def create_openai_reply(
     client: OpenAI,
     model: str,
     style_text: str,
+    memory_text: str,
+    sender_name: str,
     mention_text: str,
+    reply_sender_name: str,
     reply_text: str,
 ) -> Tuple[str, str]:
     mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
@@ -469,39 +565,24 @@ def create_openai_reply(
         "Keep output short and safe."
         "\n\nStyle notes:\n"
         f"{style_text or '(none)'}"
+        "\n\nPersistent memory notes (max 2000 chars):\n"
+        f"{memory_text or '(empty)'}"
         "\n\nTask: Reply to the user message."
+        "\nSender:\n"
+        f"{sender_name or 'unknown'}"
         "\nUser message:\n"
         f"{mention_text or '(empty)'}"
     )
 
     if reply_text:
-        prompt += "\n\nReplied-to message:\n" + reply_text
-
-    response = client.responses.create(
-        model=model,
-        store=False,
-        input=prompt,
-        reasoning={"effort": "minimal"},
-        max_output_tokens=220,
-    )
-    text = extract_response_text(response)
-    if text:
-        return text, response_debug_meta(response)
-
-    if response_incomplete_reason(response) == "max_output_tokens":
-        retry = client.responses.create(
-            model=model,
-            store=False,
-            input=prompt,
-            reasoning={"effort": "minimal"},
-            max_output_tokens=420,
+        prompt += (
+            "\n\nReplied-to sender:\n"
+            + (reply_sender_name or "unknown")
+            + "\nReplied-to message:\n"
+            + reply_text
         )
-        retry_text = extract_response_text(retry)
-        if retry_text:
-            return retry_text, response_debug_meta(retry)
-        return "", response_debug_meta(retry)
 
-    return "", response_debug_meta(response)
+    return call_openai_text(client, model, prompt, max_tokens=220, retry_max_tokens=420)
 
 
 def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> Tuple[str, str]:
@@ -516,31 +597,53 @@ def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: in
         "\n\nTask: Produce one short ambient comment."
     )
 
-    response = client.responses.create(
-        model=model,
-        store=False,
-        input=prompt,
-        reasoning={"effort": "minimal"},
-        max_output_tokens=100,
+    return call_openai_text(client, model, prompt, max_tokens=100, retry_max_tokens=180)
+
+
+def create_updated_memory(
+    client: OpenAI,
+    model: str,
+    memory_text: str,
+    style_reply_text: str,
+    sender_name: str,
+    mention_text: str,
+    reply_sender_name: str,
+    reply_text: str,
+    bot_reply_text: str,
+) -> Tuple[str, str]:
+    mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
+    reply_text = clamp_text(reply_text, MAX_REPLY_CONTEXT_CHARS)
+    bot_reply_text = clamp_text(bot_reply_text, 400)
+
+    prompt = (
+        "You maintain a short markdown memory for a Telegram bot. "
+        "Update memory with only stable, useful facts or preferences. "
+        "Do not include secrets. "
+        f"Keep the result at most {MAX_MEMORY_CHARS} characters."
+        "\nReturn only the full updated memory markdown, nothing else."
+        "\n\nReply style notes:\n"
+        f"{style_reply_text or '(none)'}"
+        "\n\nCurrent memory:\n"
+        f"{memory_text or '(empty)'}"
+        "\n\nLatest interaction:"
+        "\nSender:\n"
+        f"{sender_name or 'unknown'}"
+        "\nUser message:\n"
+        f"{mention_text or '(empty)'}"
     )
-    text = extract_response_text(response)
-    if text:
-        return text, response_debug_meta(response)
 
-    if response_incomplete_reason(response) == "max_output_tokens":
-        retry = client.responses.create(
-            model=model,
-            store=False,
-            input=prompt,
-            reasoning={"effort": "minimal"},
-            max_output_tokens=180,
+    if reply_text:
+        prompt += (
+            "\nReplied-to sender:\n"
+            + (reply_sender_name or "unknown")
+            + "\nReplied-to message:\n"
+            + reply_text
         )
-        retry_text = extract_response_text(retry)
-        if retry_text:
-            return retry_text, response_debug_meta(retry)
-        return "", response_debug_meta(retry)
 
-    return "", response_debug_meta(response)
+    prompt += "\nBot reply:\n" + (bot_reply_text or "(empty)")
+
+    updated_text, meta = call_openai_text(client, model, prompt, max_tokens=240, retry_max_tokens=420)
+    return clamp_text(updated_text, MAX_MEMORY_CHARS).strip(), meta
 
 
 def telegram_get_updates(token: str, offset: int, timeout: int) -> List[Dict[str, Any]]:
@@ -646,10 +749,22 @@ def handle_message(
 
     reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
     reply_text = message_text(reply_msg) if reply_msg else ""
+    sender_name = sender_label(message)
+    reply_sender_name = sender_label(reply_msg)
 
     try:
         style_text = style_cache_reply.get()
-        response_text, response_meta = create_openai_reply(client, options["openai_model"], style_text, text, reply_text)
+        memory_text = load_memory_text()
+        response_text, response_meta = create_openai_reply(
+            client,
+            options["openai_model"],
+            style_text,
+            memory_text,
+            sender_name,
+            text,
+            reply_sender_name,
+            reply_text,
+        )
         if response_text:
             telegram_send_message(
                 options["telegram_bot_token"],
@@ -659,6 +774,29 @@ def handle_message(
             )
             register_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
+            updated_memory, memory_meta = create_updated_memory(
+                client,
+                options["openai_model"],
+                memory_text,
+                style_text,
+                sender_name,
+                text,
+                reply_sender_name,
+                reply_text,
+                response_text,
+            )
+            if updated_memory and updated_memory != memory_text:
+                if save_memory_text(updated_memory):
+                    logging.info(
+                        "Memory updated chat=%s msg=%d chars=%d",
+                        mask_chat_id(chat_id),
+                        msg_id,
+                        len(updated_memory),
+                    )
+                else:
+                    logging.warning("Memory update skipped chat=%s msg=%d", mask_chat_id(chat_id), msg_id)
+            elif not updated_memory:
+                logging.warning("OpenAI returned empty memory update chat=%s msg=%d %s", mask_chat_id(chat_id), msg_id, memory_meta)
         else:
             logging.warning(
                 "OpenAI returned empty reply chat=%s msg=%d %s",
@@ -757,8 +895,9 @@ def run() -> None:
         logging.info("Allowed chats configured: %d", len(options["allowed_chat_ids"]))
     else:
         logging.info("Allowed chats empty: tracking all chats")
+    ensure_memory_file_exists()
     logging.info(
-        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d style_post=%s style_reply=%s",
+        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d style_post=%s style_reply=%s memory=%s",
         options["openai_model"],
         options["reply_on_mention"],
         options["ambient_enabled"],
@@ -768,6 +907,7 @@ def run() -> None:
         options["max_posts_per_day"],
         options["style_post_filename"],
         options["style_reply_filename"],
+        MEMORY_FILENAME,
     )
 
     state = load_state()

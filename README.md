@@ -3,7 +3,7 @@
 This repository contains a Home Assistant OS App (Add-on) that runs a Telegram bot with:
 
 - Telegram Bot API long polling (`getUpdates` with persisted `offset`)
-- OpenAI Responses API using configurable `openai_model` (default `gpt-5-mini`) and `store=false`
+- OpenAI Responses API using configurable `openai_model` (default `gpt-5.2`) and `store=false`
 - Strict storage minimization: only activity timestamps are persisted by default
 - Optional Mention/Reply responses, plus optional ambient comments based on activity counts only
 
@@ -14,6 +14,7 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 - Generates replies only for mention/reply events (if enabled).
 - Optionally posts short ambient comments based on activity level, without using chat content.
 - Reloads separate style/rule notes from `/config/style_post.md` and `/config/style_reply.md` (or configured filenames) at runtime.
+- Maintains `/config/memory.md` (max 2000 chars) for persistent bot memory used in replies.
 
 ## What the bot does not do
 
@@ -47,7 +48,7 @@ If privacy mode remains enabled, Telegram may only deliver commands, mentions, a
    - `telegram_bot_token`
    - `openai_api_key`
 4. Set optional controls (`allowed_chat_ids`, activity thresholds, cooldown, etc.).
-5. Create two style files in the add-on config folder (mapped read-only to `/config`):
+5. Create two style files in the add-on config folder (mapped read/write to `/config`):
    - ambient/eigenstaendige posts: `style_post.md`
    - replies auf mentions/replies: `style_reply.md`
 6. Start the app.
