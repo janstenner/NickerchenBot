@@ -56,6 +56,18 @@ def parse_csv_ints(value: str) -> Set[int]:
     return out
 
 
+def parse_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def normalize_bot_username(value: str) -> str:
     v = (value or "").strip()
     if not v:
@@ -102,10 +114,10 @@ def load_options() -> Dict[str, Any]:
     merged["style_reload_seconds"] = max(5, int(merged.get("style_reload_seconds", 60)))
     merged["activity_window_seconds"] = max(10, int(merged.get("activity_window_seconds", 300)))
     merged["activity_min_msgs_per_window"] = max(1, int(merged.get("activity_min_msgs_per_window", 3)))
-    merged["ambient_enabled"] = bool(merged.get("ambient_enabled", True))
+    merged["ambient_enabled"] = parse_bool(merged.get("ambient_enabled", True), True)
     merged["min_seconds_between_posts"] = max(0, int(merged.get("min_seconds_between_posts", 600)))
     merged["max_posts_per_day"] = max(0, int(merged.get("max_posts_per_day", 0)))
-    merged["reply_on_mention"] = bool(merged.get("reply_on_mention", True))
+    merged["reply_on_mention"] = parse_bool(merged.get("reply_on_mention", True), True)
 
     if not merged["telegram_bot_token"]:
         raise RuntimeError("Missing required option: telegram_bot_token")
@@ -425,6 +437,20 @@ def telegram_send_message(token: str, chat_id: int, text: str, reply_to_message_
         raise RuntimeError("Telegram sendMessage returned not ok")
 
 
+def telegram_get_me(token: str) -> Dict[str, Any]:
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    resp = requests.get(url, timeout=15)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Telegram getMe HTTP {resp.status_code}")
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError("Telegram getMe returned not ok")
+    result = data.get("result")
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
 def handle_message(
     message: Dict[str, Any],
     state: Dict[str, Any],
@@ -554,6 +580,23 @@ def run() -> None:
     logging.info("Starting telegram_activity_bot")
 
     options = load_options()
+    if not options["bot_username"]:
+        try:
+            me = telegram_get_me(options["telegram_bot_token"])
+            username = me.get("username")
+            if isinstance(username, str) and username.strip():
+                options["bot_username"] = normalize_bot_username(username)
+                logging.info("Loaded bot username from Telegram getMe")
+            else:
+                logging.warning("Bot username is empty; mention detection may not work")
+        except Exception as exc:
+            logging.warning("Could not auto-load bot username: %s", summarize_exception(exc))
+
+    if options["allowed_chat_ids"]:
+        logging.info("Allowed chats configured: %d", len(options["allowed_chat_ids"]))
+    else:
+        logging.info("Allowed chats empty: tracking all chats")
+
     state = load_state()
     style_cache = StyleCache(options["style_filename"], options["style_reload_seconds"])
     client = OpenAI(api_key=options["openai_api_key"])
