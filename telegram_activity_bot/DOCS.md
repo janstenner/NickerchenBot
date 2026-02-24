@@ -28,7 +28,7 @@ Activity model:
 - `activity_window_seconds` (`int`, default `300`): Sliding time window for counting messages.
 - `activity_min_msgs_per_window` (`int`, default `3`): Minimum count before ambient posts can be considered.
 - `ambient_enabled` (`bool`, default `true`): Enables ambient comments based on activity metrics only.
-- `min_seconds_between_posts` (`int`, default `600`): Cooldown for ambient posts per chat only.
+- `min_seconds_between_posts` (`int`, default `120`): Cooldown for ambient posts per chat only.
 - `max_posts_per_day` (`int`, default `0`): Hard daily cap for ambient posts per chat only (`0` disables cap).
 
 Mention behavior:

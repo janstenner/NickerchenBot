@@ -1,5 +1,5 @@
 name: Telegram Activity Bot
-version: 0.1.15
+version: 0.1.16
 slug: telegram_activity_bot
 description: Telegram group activity bot with privacy-first behavior and optional ambient comments.
 url: https://github.com/yourname/haos-telegram-activity-bot
@@ -24,7 +24,7 @@ options:
   activity_window_seconds: 300
   activity_min_msgs_per_window: 3
   ambient_enabled: true
-  min_seconds_between_posts: 600
+  min_seconds_between_posts: 120
   max_posts_per_day: 0
   reply_on_mention: true
 schema:

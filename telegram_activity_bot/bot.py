@@ -114,7 +114,7 @@ def load_options() -> Dict[str, Any]:
         "activity_window_seconds": 300,
         "activity_min_msgs_per_window": 3,
         "ambient_enabled": True,
-        "min_seconds_between_posts": 600,
+        "min_seconds_between_posts": 120,
         "max_posts_per_day": 0,
         "reply_on_mention": True,
     }
@@ -149,7 +149,7 @@ def load_options() -> Dict[str, Any]:
     merged["activity_window_seconds"] = max(10, int(merged.get("activity_window_seconds", 300)))
     merged["activity_min_msgs_per_window"] = max(1, int(merged.get("activity_min_msgs_per_window", 3)))
     merged["ambient_enabled"] = parse_bool(merged.get("ambient_enabled", True), True)
-    merged["min_seconds_between_posts"] = max(0, int(merged.get("min_seconds_between_posts", 600)))
+    merged["min_seconds_between_posts"] = max(0, int(merged.get("min_seconds_between_posts", 120)))
     merged["max_posts_per_day"] = max(0, int(merged.get("max_posts_per_day", 0)))
     merged["reply_on_mention"] = parse_bool(merged.get("reply_on_mention", True), True)
 
