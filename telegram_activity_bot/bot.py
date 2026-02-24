@@ -24,6 +24,8 @@ MAX_REPLY_CONTEXT_CHARS = 500
 MAX_AMBIENT_MEMORY_CHARS = 600
 MEMORY_FILENAME = "memory.md"
 LAST_AMBIENT_HEADER = "## Last Ambient Post"
+NICKS_FILENAME = "nicks.md"
+AMBIENT_NICK_LINES = 100
 
 
 def setup_logging() -> None:
@@ -492,6 +494,60 @@ class StyleCache:
         self._last_load = now
         return self._cached
 
+    def invalidate(self) -> None:
+        self._last_load = 0.0
+
+
+def refresh_style_post_with_random_nicks(style_post_filename: str) -> bool:
+    style_path = os.path.join(CONFIG_DIR, style_post_filename)
+    nicks_path = os.path.join(os.path.dirname(style_path), NICKS_FILENAME)
+
+    try:
+        with open(style_path, "r", encoding="utf-8") as f:
+            style_lines = f.read().splitlines()
+    except FileNotFoundError:
+        logging.warning("Style post file missing at /config/%s", style_post_filename)
+        return False
+    except Exception as exc:
+        logging.warning("Failed reading style post file: %s", summarize_exception(exc))
+        return False
+
+    try:
+        with open(nicks_path, "r", encoding="utf-8") as f:
+            nick_candidates = [line.strip() for line in f.read().splitlines() if line.strip()]
+    except FileNotFoundError:
+        logging.warning("Nicks file missing at /config/%s", NICKS_FILENAME)
+        return False
+    except Exception as exc:
+        logging.warning("Failed reading nicks file: %s", summarize_exception(exc))
+        return False
+
+    if not nick_candidates:
+        logging.warning("Nicks file is empty at /config/%s", NICKS_FILENAME)
+        return False
+
+    if len(nick_candidates) >= AMBIENT_NICK_LINES:
+        sampled = random.sample(nick_candidates, AMBIENT_NICK_LINES)
+    else:
+        sampled = [random.choice(nick_candidates) for _ in range(AMBIENT_NICK_LINES)]
+
+    preserved = style_lines[:4]
+    rebuilt_lines = preserved + [""] + sampled
+    rebuilt_text = "\n".join(rebuilt_lines).rstrip() + "\n"
+
+    try:
+        with open(style_path, "w", encoding="utf-8") as f:
+            f.write(rebuilt_text)
+        logging.info(
+            "Refreshed style post with sampled nicks base_lines=%d sampled=%d",
+            len(preserved),
+            len(sampled),
+        )
+        return True
+    except Exception as exc:
+        logging.warning("Failed writing style post file: %s", summarize_exception(exc))
+        return False
+
 
 def get_field(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
@@ -901,6 +957,8 @@ def maybe_post_ambient(
         return False
 
     try:
+        if refresh_style_post_with_random_nicks(options["style_post_filename"]):
+            style_cache_post.invalidate()
         style_text = style_cache_post.get()
         ambient_text, response_meta = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
         if ambient_text:

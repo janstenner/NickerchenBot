@@ -61,6 +61,7 @@ Default path inside container:
 - `/config/style_post.md`
 - `/config/style_reply.md`
 - `/config/memory.md`
+- `/config/nicks.md` (for ambient style randomization)
 
 ## Troubleshooting
 

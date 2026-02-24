@@ -51,6 +51,7 @@ If privacy mode remains enabled, Telegram may only deliver commands, mentions, a
 5. Create two style files in the add-on config folder (mapped read/write to `/config`):
    - ambient/eigenstaendige posts: `style_post.md`
    - replies auf mentions/replies: `style_reply.md`
-6. Start the app.
+6. Create `nicks.md` in the same folder (`/config`) for ambient random line injection.
+7. Start the app.
 
 See app-specific details in [`telegram_activity_bot/DOCS.md`](telegram_activity_bot/DOCS.md).

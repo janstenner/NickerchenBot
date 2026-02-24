@@ -1,6 +1,6 @@
-Poste immer folgendes: "\nick [LUSTIGER_NICK]"
+Poste immer folgendes: "/nick [LUSTIGER_NICK]". Dazu gehört auch der slash bzw Schrägstrich. Poste nichts anderes, auch keinen Kommentar.
 
-[LUSTIGER_NICK] soll dabei ein witziger Nickname sein. Hier ist eine Liste, an der du dich orientieren kannst, wie solche Nicks aussehen:
+[LUSTIGER_NICK] soll dabei ein eigenartiger Nickname sein. Hier ist eine Liste, an der du dich orientieren kannst, wie solche Nicks aussehen (aber kopiere auf keinen Fall einen Eintrag daraus):
 
 Ben Bada Boom
 Mister X
