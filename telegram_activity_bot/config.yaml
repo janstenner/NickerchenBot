@@ -1,0 +1,40 @@
+name: Telegram Activity Bot
+version: 0.1.0
+slug: telegram_activity_bot
+description: Telegram group activity bot with privacy-first behavior and optional ambient comments.
+url: https://github.com/yourname/haos-telegram-activity-bot
+arch:
+  - armv7
+  - aarch64
+startup: services
+boot: auto
+map:
+  - addon_config:ro
+options:
+  telegram_bot_token: ""
+  openai_api_key: ""
+  allowed_chat_ids: ""
+  admin_user_ids: ""
+  bot_username: ""
+  style_filename: style.md
+  style_reload_seconds: 60
+  activity_window_seconds: 300
+  activity_min_msgs_per_window: 3
+  ambient_enabled: true
+  min_seconds_between_posts: 600
+  max_posts_per_day: 0
+  reply_on_mention: true
+schema:
+  telegram_bot_token: password
+  openai_api_key: password
+  allowed_chat_ids: str?
+  admin_user_ids: str?
+  bot_username: str?
+  style_filename: str
+  style_reload_seconds: int
+  activity_window_seconds: int
+  activity_min_msgs_per_window: int
+  ambient_enabled: bool
+  min_seconds_between_posts: int
+  max_posts_per_day: int
+  reply_on_mention: bool

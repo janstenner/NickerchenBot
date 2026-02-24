@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+venv/
+.env
+
+telegram_activity_bot/.mypy_cache/
+telegram_activity_bot/.pytest_cache/
+telegram_activity_bot/data/
+telegram_activity_bot/state.json
