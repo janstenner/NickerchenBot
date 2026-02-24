@@ -12,3 +12,5 @@ telegram_activity_bot/.mypy_cache/
 telegram_activity_bot/.pytest_cache/
 telegram_activity_bot/data/
 telegram_activity_bot/state.json
+
+nicks.md
