@@ -1173,7 +1173,6 @@ es sind chronologisch unsere 's vorgelesen
 ich will diese chat wg auch nicht mehr ohne stylez missen
 der von a nach b räumer hotzenplotz
 curry kingler
-Robert de Negro
 Choco Moussolini
 Deiwel 65
 Spock (Star Trek)
