@@ -19,7 +19,8 @@ Bot identity:
 
 Style file behavior:
 
-- `style_filename` (`string`, default `style.md`): File loaded from `/config/{style_filename}`.
+- `style_post_filename` (`string`, default `style_post.md`): File loaded from `/config/{style_post_filename}` for ambient/eigenstaendige posts.
+- `style_reply_filename` (`string`, default `style_reply.md`): File loaded from `/config/{style_reply_filename}` for mention/reply answers.
 - `style_reload_seconds` (`int`, default `60`): Reload interval for style file.
 
 Activity model:
@@ -49,13 +50,14 @@ Mention behavior:
 - Short outputs (`max_output_tokens` kept small)
 - No tool use, no browsing integration
 
-## style.md location
+## Style file locations
 
-Provide your style notes file in the add-on config directory. With `addon_config` mapping, it is mounted read-only inside the container as `/config`.
+Provide your style note files in the add-on config directory. With `addon_config` mapping, they are mounted read-only inside the container as `/config`.
 
 Default path inside container:
 
-- `/config/style.md`
+- `/config/style_post.md`
+- `/config/style_reply.md`
 
 ## Troubleshooting
 

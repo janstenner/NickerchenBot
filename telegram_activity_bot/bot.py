@@ -85,7 +85,8 @@ def load_options() -> Dict[str, Any]:
         "allowed_chat_ids": "",
         "admin_user_ids": "",
         "bot_username": "",
-        "style_filename": "style.md",
+        "style_post_filename": "style_post.md",
+        "style_reply_filename": "style_reply.md",
         "style_reload_seconds": 60,
         "activity_window_seconds": 300,
         "activity_min_msgs_per_window": 3,
@@ -111,7 +112,15 @@ def load_options() -> Dict[str, Any]:
     merged["admin_user_ids"] = parse_csv_ints(str(merged.get("admin_user_ids", "")))
     merged["bot_username"] = normalize_bot_username(str(merged.get("bot_username", "")))
     merged["openai_model"] = str(merged.get("openai_model", "gpt-5-mini")).strip() or "gpt-5-mini"
-    merged["style_filename"] = os.path.basename(str(merged.get("style_filename", "style.md")) or "style.md")
+    legacy_style_filename = os.path.basename(str(merged.get("style_filename", "")) or "")
+    default_post_style = legacy_style_filename or "style_post.md"
+    default_reply_style = legacy_style_filename or "style_reply.md"
+    merged["style_post_filename"] = os.path.basename(
+        str(merged.get("style_post_filename", default_post_style)) or default_post_style
+    )
+    merged["style_reply_filename"] = os.path.basename(
+        str(merged.get("style_reply_filename", default_reply_style)) or default_reply_style
+    )
 
     merged["style_reload_seconds"] = max(5, int(merged.get("style_reload_seconds", 60)))
     merged["activity_window_seconds"] = max(10, int(merged.get("activity_window_seconds", 300)))
@@ -505,7 +514,7 @@ def handle_message(
     message: Dict[str, Any],
     state: Dict[str, Any],
     options: Dict[str, Any],
-    style_cache: StyleCache,
+    style_cache_reply: StyleCache,
     client: OpenAI,
 ) -> bool:
     if not is_group_message(message):
@@ -553,7 +562,7 @@ def handle_message(
     reply_text = message_text(reply_msg) if reply_msg else ""
 
     try:
-        style_text = style_cache.get()
+        style_text = style_cache_reply.get()
         response_text = create_openai_reply(client, options["openai_model"], style_text, text, reply_text)
         if response_text:
             telegram_send_message(
@@ -576,7 +585,7 @@ def maybe_post_ambient(
     chat_id: int,
     state: Dict[str, Any],
     options: Dict[str, Any],
-    style_cache: StyleCache,
+    style_cache_post: StyleCache,
     client: OpenAI,
 ) -> bool:
     if not options["ambient_enabled"]:
@@ -603,7 +612,7 @@ def maybe_post_ambient(
         return False
 
     try:
-        style_text = style_cache.get()
+        style_text = style_cache_post.get()
         ambient_text = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
         if ambient_text:
             telegram_send_message(options["telegram_bot_token"], chat_id, ambient_text)
@@ -657,7 +666,7 @@ def run() -> None:
     else:
         logging.info("Allowed chats empty: tracking all chats")
     logging.info(
-        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d",
+        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d style_post=%s style_reply=%s",
         options["openai_model"],
         options["reply_on_mention"],
         options["ambient_enabled"],
@@ -665,10 +674,13 @@ def run() -> None:
         options["activity_min_msgs_per_window"],
         options["min_seconds_between_posts"],
         options["max_posts_per_day"],
+        options["style_post_filename"],
+        options["style_reply_filename"],
     )
 
     state = load_state()
-    style_cache = StyleCache(options["style_filename"], options["style_reload_seconds"])
+    style_cache_post = StyleCache(options["style_post_filename"], options["style_reload_seconds"])
+    style_cache_reply = StyleCache(options["style_reply_filename"], options["style_reload_seconds"])
     client = OpenAI(api_key=options["openai_api_key"])
 
     backoff = 2
@@ -697,12 +709,12 @@ def run() -> None:
 
                     message = update.get("message")
                     if isinstance(message, dict):
-                        if handle_message(message, state, options, style_cache, client):
+                        if handle_message(message, state, options, style_cache_reply, client):
                             state_changed = True
 
             if time.time() >= next_ambient_ts:
                 for chat_id in ambient_candidate_chat_ids(state, options):
-                    if maybe_post_ambient(chat_id, state, options, style_cache, client):
+                    if maybe_post_ambient(chat_id, state, options, style_cache_post, client):
                         state_changed = True
                 next_ambient_ts = time.time() + AMBIENT_TICK_SECONDS
 

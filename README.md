@@ -13,7 +13,7 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 - Detects direct `@mention` and replies to bot messages.
 - Generates replies only for mention/reply events (if enabled).
 - Optionally posts short ambient comments based on activity level, without using chat content.
-- Reloads style/rule notes from `/config/style.md` (or configured filename) at runtime.
+- Reloads separate style/rule notes from `/config/style_post.md` and `/config/style_reply.md` (or configured filenames) at runtime.
 
 ## What the bot does not do
 
@@ -47,8 +47,9 @@ If privacy mode remains enabled, Telegram may only deliver commands, mentions, a
    - `telegram_bot_token`
    - `openai_api_key`
 4. Set optional controls (`allowed_chat_ids`, activity thresholds, cooldown, etc.).
-5. Create a style file in the add-on config folder (mapped read-only to `/config`):
-   - default filename: `style.md`
+5. Create two style files in the add-on config folder (mapped read-only to `/config`):
+   - ambient/eigenstaendige posts: `style_post.md`
+   - replies auf mentions/replies: `style_reply.md`
 6. Start the app.
 
 See app-specific details in [`telegram_activity_bot/DOCS.md`](telegram_activity_bot/DOCS.md).
