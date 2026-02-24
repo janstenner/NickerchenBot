@@ -381,26 +381,66 @@ class StyleCache:
         return self._cached
 
 
+def get_field(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def extract_text_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        candidate = value.get("value") or value.get("text")
+        return candidate if isinstance(candidate, str) else ""
+    candidate = getattr(value, "value", None)
+    if isinstance(candidate, str):
+        return candidate
+    candidate = getattr(value, "text", None)
+    if isinstance(candidate, str):
+        return candidate
+    return ""
+
+
 def extract_response_text(response: Any) -> str:
-    output_text = getattr(response, "output_text", None)
+    output_text = get_field(response, "output_text")
     if isinstance(output_text, str) and output_text.strip():
         return output_text.strip()
 
-    output = getattr(response, "output", None)
+    output = get_field(response, "output")
     if isinstance(output, list):
         parts: List[str] = []
         for item in output:
-            content = getattr(item, "content", None)
+            content = get_field(item, "content")
             if not isinstance(content, list):
                 continue
             for block in content:
-                text_val = getattr(block, "text", None)
-                if isinstance(text_val, str):
+                text_val = extract_text_value(get_field(block, "text"))
+                if text_val:
                     parts.append(text_val)
         if parts:
             return "\n".join(parts).strip()
 
     return ""
+
+
+def response_debug_meta(response: Any) -> str:
+    status = get_field(response, "status")
+    status_str = status if isinstance(status, str) and status else "unknown"
+
+    output = get_field(response, "output")
+    output_count = len(output) if isinstance(output, list) else 0
+
+    incomplete = get_field(response, "incomplete_details")
+    reason = ""
+    if incomplete is not None:
+        reason_val = get_field(incomplete, "reason")
+        if isinstance(reason_val, str):
+            reason = reason_val
+
+    if reason:
+        return f"status={status_str} output_items={output_count} reason={reason}"
+    return f"status={status_str} output_items={output_count}"
 
 
 def create_openai_reply(
@@ -409,7 +449,7 @@ def create_openai_reply(
     style_text: str,
     mention_text: str,
     reply_text: str,
-) -> str:
+) -> Tuple[str, str]:
     mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
     reply_text = clamp_text(reply_text, MAX_REPLY_CONTEXT_CHARS)
 
@@ -433,10 +473,10 @@ def create_openai_reply(
         input=prompt,
         max_output_tokens=140,
     )
-    return extract_response_text(response)
+    return extract_response_text(response), response_debug_meta(response)
 
 
-def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> str:
+def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> Tuple[str, str]:
     prompt = (
         "You are a concise Telegram group assistant. "
         "Generate exactly one harmless sentence with no assumptions about specific chat content."
@@ -454,7 +494,7 @@ def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: in
         input=prompt,
         max_output_tokens=60,
     )
-    return extract_response_text(response)
+    return extract_response_text(response), response_debug_meta(response)
 
 
 def telegram_get_updates(token: str, offset: int, timeout: int) -> List[Dict[str, Any]]:
@@ -563,7 +603,7 @@ def handle_message(
 
     try:
         style_text = style_cache_reply.get()
-        response_text = create_openai_reply(client, options["openai_model"], style_text, text, reply_text)
+        response_text, response_meta = create_openai_reply(client, options["openai_model"], style_text, text, reply_text)
         if response_text:
             telegram_send_message(
                 options["telegram_bot_token"],
@@ -574,7 +614,12 @@ def handle_message(
             register_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
         else:
-            logging.warning("OpenAI returned empty reply chat=%s msg=%d", mask_chat_id(chat_id), msg_id)
+            logging.warning(
+                "OpenAI returned empty reply chat=%s msg=%d %s",
+                mask_chat_id(chat_id),
+                msg_id,
+                response_meta,
+            )
     except Exception as exc:
         logging.error("Mention/Reply processing failed: %s", summarize_exception(exc))
 
@@ -613,7 +658,7 @@ def maybe_post_ambient(
 
     try:
         style_text = style_cache_post.get()
-        ambient_text = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
+        ambient_text, response_meta = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
         if ambient_text:
             telegram_send_message(options["telegram_bot_token"], chat_id, ambient_text)
             register_post(chat_state, now_ts)
@@ -625,6 +670,7 @@ def maybe_post_ambient(
                 prob,
             )
             return True
+        logging.warning("OpenAI returned empty ambient chat=%s %s", mask_chat_id(chat_id), response_meta)
     except Exception as exc:
         logging.error("Ambient post failed: %s", summarize_exception(exc))
 
