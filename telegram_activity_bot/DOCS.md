@@ -28,8 +28,8 @@ Activity model:
 - `activity_window_seconds` (`int`, default `300`): Sliding time window for counting messages.
 - `activity_min_msgs_per_window` (`int`, default `3`): Minimum count before ambient posts can be considered.
 - `ambient_enabled` (`bool`, default `true`): Enables ambient comments based on activity metrics only.
-- `min_seconds_between_posts` (`int`, default `600`): Cooldown between bot posts per chat.
-- `max_posts_per_day` (`int`, default `0`): Hard daily post cap per chat (`0` disables cap).
+- `min_seconds_between_posts` (`int`, default `600`): Cooldown for ambient posts per chat only.
+- `max_posts_per_day` (`int`, default `0`): Hard daily cap for ambient posts per chat only (`0` disables cap).
 
 Mention behavior:
 
@@ -43,7 +43,7 @@ Mention behavior:
 - Mention/reply text is used in-memory to generate an immediate response.
 - Mention context is truncated to 1000 chars and replied-to context to 500 chars.
 - Reply context includes sender usernames/IDs for current and replied-to messages.
-- Persistent memory file: `/config/memory.md` (max 2000 chars), included in every reply context.
+- Persistent memory file: `/config/memory.md` (max 2000 chars), included in every reply context; it always keeps the latest ambient post under `## Last Ambient Post`.
 
 ## OpenAI policy used
 
@@ -68,7 +68,7 @@ Default path inside container:
 
 - Verify `allowed_chat_ids` includes the real group ID.
 - Verify `bot_username` matches the Telegram bot username.
-- Verify cooldown/day-cap settings are not too strict.
+- Verify ambient cooldown/day-cap settings are not too strict.
 - Verify `ambient_enabled=true` for ambient mode.
 
 "Activity is not detected":

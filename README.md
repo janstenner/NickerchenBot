@@ -14,7 +14,7 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 - Generates replies only for mention/reply events (if enabled).
 - Optionally posts short ambient comments based on activity level, without using chat content.
 - Reloads separate style/rule notes from `/config/style_post.md` and `/config/style_reply.md` (or configured filenames) at runtime.
-- Maintains `/config/memory.md` (max 2000 chars) for persistent bot memory used in replies.
+- Maintains `/config/memory.md` (max 2000 chars) for persistent bot memory used in replies, including the latest ambient post.
 
 ## What the bot does not do
 

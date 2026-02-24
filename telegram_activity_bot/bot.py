@@ -21,7 +21,9 @@ MAX_STYLE_CHARS = 20000
 MAX_MEMORY_CHARS = 5000
 MAX_MENTION_CONTEXT_CHARS = 1000
 MAX_REPLY_CONTEXT_CHARS = 500
+MAX_AMBIENT_MEMORY_CHARS = 600
 MEMORY_FILENAME = "memory.md"
+LAST_AMBIENT_HEADER = "## Last Ambient Post"
 
 
 def setup_logging() -> None:
@@ -162,9 +164,12 @@ def load_options() -> Dict[str, Any]:
 def default_chat_state() -> Dict[str, Any]:
     return {
         "activity_timestamps": [],
-        "last_post_ts": 0,
-        "daily_count": 0,
-        "daily_date": "",
+        "last_ambient_post_ts": 0,
+        "ambient_daily_count": 0,
+        "ambient_daily_date": "",
+        "last_reply_post_ts": 0,
+        "reply_daily_count": 0,
+        "reply_daily_date": "",
     }
 
 
@@ -211,12 +216,18 @@ def get_chat_state(state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
     chat = chats[key]
     if "activity_timestamps" not in chat or not isinstance(chat.get("activity_timestamps"), list):
         chat["activity_timestamps"] = []
-    if "last_post_ts" not in chat:
-        chat["last_post_ts"] = 0
-    if "daily_count" not in chat:
-        chat["daily_count"] = 0
-    if "daily_date" not in chat:
-        chat["daily_date"] = ""
+    if "last_ambient_post_ts" not in chat:
+        chat["last_ambient_post_ts"] = int(chat.get("last_post_ts", 0) or 0)
+    if "ambient_daily_count" not in chat:
+        chat["ambient_daily_count"] = int(chat.get("daily_count", 0) or 0)
+    if "ambient_daily_date" not in chat:
+        chat["ambient_daily_date"] = str(chat.get("daily_date", "") or "")
+    if "last_reply_post_ts" not in chat:
+        chat["last_reply_post_ts"] = 0
+    if "reply_daily_count" not in chat:
+        chat["reply_daily_count"] = 0
+    if "reply_daily_date" not in chat:
+        chat["reply_daily_date"] = ""
     return chat
 
 
@@ -244,76 +255,60 @@ def today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def can_post_now(chat_state: Dict[str, Any], now_ts: int, min_seconds_between_posts: int, max_posts_per_day: int) -> bool:
-    last_post_ts = int(chat_state.get("last_post_ts", 0) or 0)
-    if now_ts - last_post_ts < min_seconds_between_posts:
+def can_post_ambient(chat_state: Dict[str, Any], now_ts: int, min_seconds_between_posts: int, max_posts_per_day: int) -> bool:
+    last_ambient_post_ts = int(chat_state.get("last_ambient_post_ts", 0) or 0)
+    if now_ts - last_ambient_post_ts < min_seconds_between_posts:
         return False
 
     if max_posts_per_day > 0:
         d = today_utc()
-        if chat_state.get("daily_date") != d:
-            chat_state["daily_date"] = d
-            chat_state["daily_count"] = 0
-        if int(chat_state.get("daily_count", 0) or 0) >= max_posts_per_day:
+        if chat_state.get("ambient_daily_date") != d:
+            chat_state["ambient_daily_date"] = d
+            chat_state["ambient_daily_count"] = 0
+        if int(chat_state.get("ambient_daily_count", 0) or 0) >= max_posts_per_day:
             return False
 
     return True
 
 
-def can_post_reply(chat_state: Dict[str, Any], max_posts_per_day: int) -> bool:
-    if max_posts_per_day <= 0:
-        return True
-
-    d = today_utc()
-    if chat_state.get("daily_date") != d:
-        chat_state["daily_date"] = d
-        chat_state["daily_count"] = 0
-
-    return int(chat_state.get("daily_count", 0) or 0) < max_posts_per_day
-
-
-def post_block_reason(
+def ambient_block_reason(
     chat_state: Dict[str, Any],
     now_ts: int,
     min_seconds_between_posts: int,
     max_posts_per_day: int,
 ) -> str:
-    last_post_ts = int(chat_state.get("last_post_ts", 0) or 0)
-    since_last = now_ts - last_post_ts
+    last_ambient_post_ts = int(chat_state.get("last_ambient_post_ts", 0) or 0)
+    since_last = now_ts - last_ambient_post_ts
     if since_last < min_seconds_between_posts:
         remaining = min_seconds_between_posts - since_last
         return f"cooldown({remaining}s)"
 
     if max_posts_per_day > 0:
         d = today_utc()
-        if chat_state.get("daily_date") == d:
-            daily_count = int(chat_state.get("daily_count", 0) or 0)
+        if chat_state.get("ambient_daily_date") == d:
+            daily_count = int(chat_state.get("ambient_daily_count", 0) or 0)
             if daily_count >= max_posts_per_day:
                 return "daily_cap"
 
     return ""
 
 
-def reply_block_reason(chat_state: Dict[str, Any], max_posts_per_day: int) -> str:
-    if max_posts_per_day <= 0:
-        return ""
-
+def register_ambient_post(chat_state: Dict[str, Any], now_ts: int) -> None:
+    chat_state["last_ambient_post_ts"] = now_ts
     d = today_utc()
-    if chat_state.get("daily_date") == d:
-        daily_count = int(chat_state.get("daily_count", 0) or 0)
-        if daily_count >= max_posts_per_day:
-            return "daily_cap"
-
-    return ""
+    if chat_state.get("ambient_daily_date") != d:
+        chat_state["ambient_daily_date"] = d
+        chat_state["ambient_daily_count"] = 0
+    chat_state["ambient_daily_count"] = int(chat_state.get("ambient_daily_count", 0) or 0) + 1
 
 
-def register_post(chat_state: Dict[str, Any], now_ts: int) -> None:
-    chat_state["last_post_ts"] = now_ts
+def register_reply_post(chat_state: Dict[str, Any], now_ts: int) -> None:
+    chat_state["last_reply_post_ts"] = now_ts
     d = today_utc()
-    if chat_state.get("daily_date") != d:
-        chat_state["daily_date"] = d
-        chat_state["daily_count"] = 0
-    chat_state["daily_count"] = int(chat_state.get("daily_count", 0) or 0) + 1
+    if chat_state.get("reply_daily_date") != d:
+        chat_state["reply_daily_date"] = d
+        chat_state["reply_daily_count"] = 0
+    chat_state["reply_daily_count"] = int(chat_state.get("reply_daily_count", 0) or 0) + 1
 
 
 def compute_ambient_probability(msgs_per_min: float) -> float:
@@ -405,6 +400,45 @@ def ensure_memory_file_exists() -> None:
         return
     if save_memory_text(""):
         logging.info("Created memory file at /config/%s", MEMORY_FILENAME)
+
+
+def extract_last_ambient_from_memory(memory_text: str) -> str:
+    text = (memory_text or "").strip()
+    if not text:
+        return ""
+    marker = f"\n{LAST_AMBIENT_HEADER}\n"
+    if marker in text:
+        return text.split(marker, 1)[1].strip()
+    if text.startswith(f"{LAST_AMBIENT_HEADER}\n"):
+        return text[len(f"{LAST_AMBIENT_HEADER}\n") :].strip()
+    return ""
+
+
+def upsert_last_ambient_in_memory(memory_text: str, ambient_text: str) -> str:
+    ambient = clamp_text((ambient_text or "").strip(), MAX_AMBIENT_MEMORY_CHARS).strip()
+    if not ambient:
+        return clamp_text((memory_text or "").strip(), MAX_MEMORY_CHARS).strip()
+
+    marker = f"\n{LAST_AMBIENT_HEADER}\n"
+    base = (memory_text or "").strip()
+    if marker in base:
+        base = base.split(marker, 1)[0].strip()
+    elif base.startswith(f"{LAST_AMBIENT_HEADER}\n"):
+        base = ""
+
+    ambient_section = f"{LAST_AMBIENT_HEADER}\n{ambient}"
+    if len(ambient_section) >= MAX_MEMORY_CHARS:
+        return clamp_text(ambient_section, MAX_MEMORY_CHARS).strip()
+
+    available_for_base = MAX_MEMORY_CHARS - len(ambient_section)
+    if base:
+        base = clamp_text(base, max(0, available_for_base - 2)).strip()
+
+    if base:
+        combined = f"{base}\n\n{ambient_section}"
+    else:
+        combined = ambient_section
+    return clamp_text(combined, MAX_MEMORY_CHARS).strip()
 
 
 def is_mention(text: str, bot_username: str) -> bool:
@@ -586,7 +620,7 @@ def create_openai_reply(
         "Keep output short and safe."
         "\n\nStyle notes:\n"
         f"{style_text or '(none)'}"
-        "\n\nPersistent memory notes (max 2000 chars):\n"
+        f"\n\nPersistent memory notes (max {MAX_MEMORY_CHARS} chars):\n"
         f"{memory_text or '(empty)'}"
         "\n\nTask: Reply to the user message."
         "\nSender:\n"
@@ -763,11 +797,6 @@ def handle_message(
         logging.info("Skip reply chat=%s msg=%d reason=no_mention_or_reply", mask_chat_id(chat_id), msg_id)
         return True
 
-    block_reason = reply_block_reason(chat_state, options["max_posts_per_day"])
-    if not can_post_reply(chat_state, options["max_posts_per_day"]):
-        logging.info("Skip reply chat=%s msg=%d reason=%s", mask_chat_id(chat_id), msg_id, block_reason or "blocked")
-        return True
-
     reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
     reply_text = message_text(reply_msg) if reply_msg else ""
     sender_name = sender_label(message)
@@ -793,7 +822,7 @@ def handle_message(
                 response_text,
                 reply_to_message_id=message.get("message_id"),
             )
-            register_post(chat_state, now_ts)
+            register_reply_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
             updated_memory, memory_meta = create_updated_memory(
                 client,
@@ -806,6 +835,9 @@ def handle_message(
                 reply_text,
                 response_text,
             )
+            last_ambient_post = extract_last_ambient_from_memory(memory_text)
+            if last_ambient_post:
+                updated_memory = upsert_last_ambient_in_memory(updated_memory, last_ambient_post)
             if updated_memory and updated_memory != memory_text:
                 if save_memory_text(updated_memory):
                     logging.info(
@@ -849,12 +881,19 @@ def maybe_post_ambient(
     if count < options["activity_min_msgs_per_window"]:
         return False
 
-    if not can_post_now(
+    if not can_post_ambient(
         chat_state,
         now_ts,
         options["min_seconds_between_posts"],
         options["max_posts_per_day"],
     ):
+        reason = ambient_block_reason(
+            chat_state,
+            now_ts,
+            options["min_seconds_between_posts"],
+            options["max_posts_per_day"],
+        )
+        logging.info("Skip ambient chat=%s reason=%s", mask_chat_id(chat_id), reason or "blocked")
         return False
 
     prob = compute_ambient_probability(per_min)
@@ -866,7 +905,18 @@ def maybe_post_ambient(
         ambient_text, response_meta = create_openai_ambient(client, options["openai_model"], style_text, count, per_min)
         if ambient_text:
             telegram_send_message(options["telegram_bot_token"], chat_id, ambient_text)
-            register_post(chat_state, now_ts)
+            register_ambient_post(chat_state, now_ts)
+            memory_before = load_memory_text()
+            memory_after = upsert_last_ambient_in_memory(memory_before, ambient_text)
+            if memory_after != memory_before:
+                if save_memory_text(memory_after):
+                    logging.info(
+                        "Memory last ambient updated chat=%s chars=%d",
+                        mask_chat_id(chat_id),
+                        len(memory_after),
+                    )
+                else:
+                    logging.warning("Memory last ambient update skipped chat=%s", mask_chat_id(chat_id))
             logging.info(
                 "Ambient post chat=%s count=%d per_min=%.2f prob=%.3f",
                 mask_chat_id(chat_id),
@@ -918,7 +968,7 @@ def run() -> None:
         logging.info("Allowed chats empty: tracking all chats")
     ensure_memory_file_exists()
     logging.info(
-        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d style_post=%s style_reply=%s memory=%s",
+        "Runtime options model=%s reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d ambient_cooldown=%ds ambient_max_posts_per_day=%d style_post=%s style_reply=%s memory=%s",
         options["openai_model"],
         options["reply_on_mention"],
         options["ambient_enabled"],
