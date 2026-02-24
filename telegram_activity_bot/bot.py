@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
-from openai import BadRequestError, OpenAI
+from openai import OpenAI
 
 
 OPTIONS_PATH = "/data/options.json"
@@ -531,33 +531,18 @@ def response_incomplete_reason(response: Any) -> str:
     return ""
 
 
-def create_response_with_fallback(
+def create_response(
     client: OpenAI,
     model: str,
     prompt: str,
     max_output_tokens: int,
 ) -> Any:
-    try:
-        return client.responses.create(
-            model=model,
-            store=False,
-            input=prompt,
-            reasoning={"effort": "minimal"},
-            max_output_tokens=max_output_tokens,
-        )
-    except BadRequestError as exc:
-        logging.warning(
-            "OpenAI bad request with reasoning model=%s max_tokens=%d %s; retry_without_reasoning",
-            model,
-            max_output_tokens,
-            summarize_exception(exc),
-        )
-        return client.responses.create(
-            model=model,
-            store=False,
-            input=prompt,
-            max_output_tokens=max_output_tokens,
-        )
+    return client.responses.create(
+        model=model,
+        store=False,
+        input=prompt,
+        max_output_tokens=max_output_tokens,
+    )
 
 
 def call_openai_text(
@@ -567,13 +552,13 @@ def call_openai_text(
     max_tokens: int,
     retry_max_tokens: int,
 ) -> Tuple[str, str]:
-    response = create_response_with_fallback(client, model, prompt, max_tokens)
+    response = create_response(client, model, prompt, max_tokens)
     text = extract_response_text(response)
     if text:
         return text, response_debug_meta(response)
 
     if response_incomplete_reason(response) == "max_output_tokens" and retry_max_tokens > max_tokens:
-        retry = create_response_with_fallback(client, model, prompt, retry_max_tokens)
+        retry = create_response(client, model, prompt, retry_max_tokens)
         retry_text = extract_response_text(retry)
         if retry_text:
             return retry_text, response_debug_meta(retry)
