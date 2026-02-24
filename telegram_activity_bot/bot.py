@@ -443,6 +443,16 @@ def response_debug_meta(response: Any) -> str:
     return f"status={status_str} output_items={output_count}"
 
 
+def response_incomplete_reason(response: Any) -> str:
+    incomplete = get_field(response, "incomplete_details")
+    if incomplete is None:
+        return ""
+    reason_val = get_field(incomplete, "reason")
+    if isinstance(reason_val, str):
+        return reason_val
+    return ""
+
+
 def create_openai_reply(
     client: OpenAI,
     model: str,
@@ -471,9 +481,27 @@ def create_openai_reply(
         model=model,
         store=False,
         input=prompt,
-        max_output_tokens=140,
+        reasoning={"effort": "minimal"},
+        max_output_tokens=220,
     )
-    return extract_response_text(response), response_debug_meta(response)
+    text = extract_response_text(response)
+    if text:
+        return text, response_debug_meta(response)
+
+    if response_incomplete_reason(response) == "max_output_tokens":
+        retry = client.responses.create(
+            model=model,
+            store=False,
+            input=prompt,
+            reasoning={"effort": "minimal"},
+            max_output_tokens=420,
+        )
+        retry_text = extract_response_text(retry)
+        if retry_text:
+            return retry_text, response_debug_meta(retry)
+        return "", response_debug_meta(retry)
+
+    return "", response_debug_meta(response)
 
 
 def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> Tuple[str, str]:
@@ -492,9 +520,27 @@ def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: in
         model=model,
         store=False,
         input=prompt,
-        max_output_tokens=60,
+        reasoning={"effort": "minimal"},
+        max_output_tokens=100,
     )
-    return extract_response_text(response), response_debug_meta(response)
+    text = extract_response_text(response)
+    if text:
+        return text, response_debug_meta(response)
+
+    if response_incomplete_reason(response) == "max_output_tokens":
+        retry = client.responses.create(
+            model=model,
+            store=False,
+            input=prompt,
+            reasoning={"effort": "minimal"},
+            max_output_tokens=180,
+        )
+        retry_text = extract_response_text(retry)
+        if retry_text:
+            return retry_text, response_debug_meta(retry)
+        return "", response_debug_meta(retry)
+
+    return "", response_debug_meta(response)
 
 
 def telegram_get_updates(token: str, offset: int, timeout: int) -> List[Dict[str, Any]]:

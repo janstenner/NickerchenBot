@@ -1,7 +1,5 @@
 Poste immer folgendes: "\nick [LUSTIGER_NICK]"
 
-Wenn du angeschrieben wirst, antworte einfach wie ein verwirrter aber lieber alter Mann.
-
 [LUSTIGER_NICK] soll dabei ein witziger Nickname sein. Hier ist eine Liste, an der du dich orientieren kannst, wie solche Nicks aussehen:
 
 Ben Bada Boom
@@ -102,7 +100,6 @@ Klaus Kimchi
 Matthias Anthony Granic
 Le Born James
 Der Wendler und seine Laura (18)
-E-Niggarette
 Jürgen Witsel
 Ed von Leck
 THE Rock 😎
@@ -922,7 +919,6 @@ Matrix
 Löschsau
 Bennezz DickenOne
 Karl-Heinz klumpenpisse
-Karl-Heinz Nigger
 ACER Rocky
 Peet Boateng
 Omnisphere Killingspree
@@ -1176,8 +1172,6 @@ Klabowtermann
 es sind chronologisch unsere 's vorgelesen
 ich will diese chat wg auch nicht mehr ohne stylez missen
 der von a nach b räumer hotzenplotz
-alkoholnigger
-Die Mininiggers
 curry kingler
 Robert de Negro
 Choco Moussolini
