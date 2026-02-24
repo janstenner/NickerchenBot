@@ -228,6 +228,28 @@ def can_post_now(chat_state: Dict[str, Any], now_ts: int, min_seconds_between_po
     return True
 
 
+def post_block_reason(
+    chat_state: Dict[str, Any],
+    now_ts: int,
+    min_seconds_between_posts: int,
+    max_posts_per_day: int,
+) -> str:
+    last_post_ts = int(chat_state.get("last_post_ts", 0) or 0)
+    since_last = now_ts - last_post_ts
+    if since_last < min_seconds_between_posts:
+        remaining = min_seconds_between_posts - since_last
+        return f"cooldown({remaining}s)"
+
+    if max_posts_per_day > 0:
+        d = today_utc()
+        if chat_state.get("daily_date") == d:
+            daily_count = int(chat_state.get("daily_count", 0) or 0)
+            if daily_count >= max_posts_per_day:
+                return "daily_cap"
+
+    return ""
+
+
 def register_post(chat_state: Dict[str, Any], now_ts: int) -> None:
     chat_state["last_post_ts"] = now_ts
     d = today_utc()
@@ -476,19 +498,37 @@ def handle_message(
     text = message_text(message)
     mentioned = is_mention(text, options["bot_username"])
     replied = is_reply_to_bot(message, options["bot_username"])
+    msg_id = int(message.get("message_id", 0) or 0)
+    logging.info(
+        "Message flags chat=%s msg=%d mention=%s reply_to_bot=%s reply_enabled=%s",
+        mask_chat_id(chat_id),
+        msg_id,
+        mentioned,
+        replied,
+        options["reply_on_mention"],
+    )
 
     if not options["reply_on_mention"]:
+        logging.info("Skip reply chat=%s msg=%d reason=reply_disabled", mask_chat_id(chat_id), msg_id)
         return True
 
     if not (mentioned or replied):
+        logging.info("Skip reply chat=%s msg=%d reason=no_mention_or_reply", mask_chat_id(chat_id), msg_id)
         return True
 
+    block_reason = post_block_reason(
+        chat_state,
+        now_ts,
+        options["min_seconds_between_posts"],
+        options["max_posts_per_day"],
+    )
     if not can_post_now(
         chat_state,
         now_ts,
         options["min_seconds_between_posts"],
         options["max_posts_per_day"],
     ):
+        logging.info("Skip reply chat=%s msg=%d reason=%s", mask_chat_id(chat_id), msg_id, block_reason or "blocked")
         return True
 
     reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
@@ -506,6 +546,8 @@ def handle_message(
             )
             register_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
+        else:
+            logging.warning("OpenAI returned empty reply chat=%s msg=%d", mask_chat_id(chat_id), msg_id)
     except Exception as exc:
         logging.error("Mention/Reply processing failed: %s", summarize_exception(exc))
 
@@ -596,6 +638,15 @@ def run() -> None:
         logging.info("Allowed chats configured: %d", len(options["allowed_chat_ids"]))
     else:
         logging.info("Allowed chats empty: tracking all chats")
+    logging.info(
+        "Runtime options reply_on_mention=%s ambient_enabled=%s window=%ds min_msgs=%d cooldown=%ds max_posts_per_day=%d",
+        options["reply_on_mention"],
+        options["ambient_enabled"],
+        options["activity_window_seconds"],
+        options["activity_min_msgs_per_window"],
+        options["min_seconds_between_posts"],
+        options["max_posts_per_day"],
+    )
 
     state = load_state()
     style_cache = StyleCache(options["style_filename"], options["style_reload_seconds"])
