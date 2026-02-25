@@ -705,7 +705,6 @@ def create_response(
     max_output_tokens: int,
     use_tools: bool = False,
     include_sources: bool = False,
-    previous_response_id: Optional[str] = None,
 ) -> Any:
     kwargs: Dict[str, Any] = {
         "model": model,
@@ -714,8 +713,6 @@ def create_response(
         "reasoning": {"effort": "medium"},
         "max_output_tokens": max_output_tokens,
     }
-    if previous_response_id:
-        kwargs["previous_response_id"] = previous_response_id
     if use_tools:
         kwargs["tools"] = [{"type": "web_search"}]
         kwargs["tool_choice"] = "auto"
@@ -792,21 +789,24 @@ def create_openai_reply(
         return posted_text, f"{response_debug_meta(response)} sources={len(sources)}", extracted_text
 
     if response_incomplete_reason(response) == "max_output_tokens":
-        follow_prompt = "Provide the final user-facing reply text now. Keep it short and do not call tools."
-        response_follow = create_response(
+        follow_prompt = (
+            prompt
+            + "\n\nNow provide only the final user-facing reply text. "
+            + "Keep it short and do not call tools."
+        )
+        follow_text, follow_meta = call_openai_text(
             client,
             model,
             follow_prompt,
-            420,
+            max_tokens=420,
+            retry_max_tokens=520,
             use_tools=False,
             include_sources=False,
-            previous_response_id=get_field(response, "id"),
         )
-        follow_text = extract_response_text(response_follow)
         if follow_text:
             posted_text = follow_text + format_sources_block(sources)
-            return posted_text, f"{response_debug_meta(response_follow)} sources={len(sources)}", follow_text
-        return "", f"{response_debug_meta(response_follow)} sources={len(sources)} {response_output_debug(response_follow)}", ""
+            return posted_text, f"{follow_meta} sources={len(sources)}", follow_text
+        return "", f"{follow_meta} sources={len(sources)}", ""
 
     return "", f"{response_debug_meta(response)} sources={len(sources)} {response_output_debug(response)}", ""
 
