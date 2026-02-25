@@ -26,6 +26,7 @@ MEMORY_FILENAME = "memory.md"
 LAST_AMBIENT_HEADER = "## Last Ambient Post"
 NICKS_FILENAME = "nicks.md"
 AMBIENT_NICK_LINES = 100
+AMBIENT_POST_SEND_PROBABILITY = 0.30
 
 
 def setup_logging() -> None:
@@ -106,7 +107,7 @@ def load_options() -> Dict[str, Any]:
     defaults: Dict[str, Any] = {
         "telegram_bot_token": "",
         "openai_api_key": "",
-        "openai_model": "gpt-5.2",
+        "openai_model": "gpt-5.2-chat-latest",
         "allowed_chat_ids": "",
         "admin_user_ids": "",
         "bot_username": "",
@@ -136,7 +137,9 @@ def load_options() -> Dict[str, Any]:
     merged["allowed_chat_ids"] = parse_csv_ints(str(merged.get("allowed_chat_ids", "")))
     merged["admin_user_ids"] = parse_csv_ints(str(merged.get("admin_user_ids", "")))
     merged["bot_username"] = normalize_bot_username(str(merged.get("bot_username", "")))
-    merged["openai_model"] = str(merged.get("openai_model", "gpt-5.2")).strip() or "gpt-5.2"
+    merged["openai_model"] = (
+        str(merged.get("openai_model", "gpt-5.2-chat-latest")).strip() or "gpt-5.2-chat-latest"
+    )
     legacy_style_filename = os.path.basename(str(merged.get("style_filename", "")) or "")
     default_post_style = legacy_style_filename or "style_post.md"
     default_reply_style = legacy_style_filename or "style_reply.md"
@@ -311,11 +314,6 @@ def register_reply_post(chat_state: Dict[str, Any], now_ts: int) -> None:
         chat_state["reply_daily_date"] = d
         chat_state["reply_daily_count"] = 0
     chat_state["reply_daily_count"] = int(chat_state.get("reply_daily_count", 0) or 0) + 1
-
-
-def compute_ambient_probability(msgs_per_min: float) -> float:
-    # Probability per ambient tick (default tick ~10s)
-    return min(0.6, 0.03 + (msgs_per_min / 100.0))
 
 
 def is_group_message(message: Dict[str, Any]) -> bool:
@@ -631,6 +629,10 @@ def create_response(
         model=model,
         store=False,
         input=prompt,
+        reasoning={"effort": "medium"},
+        tools=[{"type": "web_search"}],
+        tool_choice="auto",
+        include=["web_search_call.action.sources"],
         max_output_tokens=max_output_tokens,
     )
 
@@ -952,9 +954,14 @@ def maybe_post_ambient(
         logging.info("Skip ambient chat=%s reason=%s", mask_chat_id(chat_id), reason or "blocked")
         return False
 
-    prob = compute_ambient_probability(per_min)
-    if random.random() >= prob:
-        return False
+    if random.random() >= AMBIENT_POST_SEND_PROBABILITY:
+        register_ambient_post(chat_state, now_ts)
+        logging.info(
+            "Ambient skipped by send gate chat=%s gate_prob=%.2f",
+            mask_chat_id(chat_id),
+            AMBIENT_POST_SEND_PROBABILITY,
+        )
+        return True
 
     try:
         if refresh_style_post_with_random_nicks(options["style_post_filename"]):
@@ -976,11 +983,11 @@ def maybe_post_ambient(
                 else:
                     logging.warning("Memory last ambient update skipped chat=%s", mask_chat_id(chat_id))
             logging.info(
-                "Ambient post chat=%s count=%d per_min=%.2f prob=%.3f",
+                "Ambient post chat=%s count=%d per_min=%.2f gate_prob=%.2f",
                 mask_chat_id(chat_id),
                 count,
                 per_min,
-                prob,
+                AMBIENT_POST_SEND_PROBABILITY,
             )
             return True
         logging.warning("OpenAI returned empty ambient chat=%s %s", mask_chat_id(chat_id), response_meta)

@@ -3,7 +3,7 @@
 This repository contains a Home Assistant OS App (Add-on) that runs a Telegram bot with:
 
 - Telegram Bot API long polling (`getUpdates` with persisted `offset`)
-- OpenAI Responses API using configurable `openai_model` (default `gpt-5.2`) and `store=false`
+- OpenAI Responses API using configurable `openai_model` (default `gpt-5.2-chat-latest`) and `store=false`
 - Strict storage minimization: only activity timestamps are persisted by default
 - Optional Mention/Reply responses, plus optional ambient comments based on activity counts only
 
@@ -20,7 +20,7 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 
 - It does not persist non-mentioned chat message text.
 - It does not call OpenAI for regular background messages.
-- It does not use tools, browsing, or files outside `/data` and `/config`.
+- It does not use local tools, shell execution, or files outside `/data` and `/config`.
 - It does not log Telegram message text, prompt text, or API keys.
 
 ## Security and privacy model
