@@ -36,6 +36,9 @@ def setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("openai._base_client").setLevel(logging.WARNING)
 
 
 def summarize_exception(exc: Exception) -> str:
@@ -592,24 +595,6 @@ def extract_response_text(response: Any) -> str:
     return ""
 
 
-def serialize_response_json(response: Any) -> str:
-    try:
-        if hasattr(response, "model_dump"):
-            payload = response.model_dump()
-        elif hasattr(response, "to_dict"):
-            payload = response.to_dict()
-        elif isinstance(response, dict):
-            payload = response
-        else:
-            payload = response
-        return json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        try:
-            return str(response)
-        except Exception:
-            return ""
-
-
 def response_debug_meta(response: Any) -> str:
     status = get_field(response, "status")
     status_str = status if isinstance(status, str) and status else "unknown"
@@ -680,22 +665,63 @@ def response_incomplete_reason(response: Any) -> str:
     return ""
 
 
+def extract_web_sources(response: Any, max_sources: int = 12) -> List[str]:
+    output = get_field(response, "output")
+    if not isinstance(output, list):
+        return []
+
+    seen: Set[str] = set()
+    urls: List[str] = []
+    for item in output:
+        if get_field(item, "type") != "web_search_call":
+            continue
+        action = get_field(item, "action")
+        sources = get_field(action, "sources")
+        if not isinstance(sources, list):
+            continue
+        for source in sources:
+            url = get_field(source, "url")
+            if isinstance(url, str):
+                u = url.strip()
+                if u and u not in seen:
+                    seen.add(u)
+                    urls.append(u)
+                    if len(urls) >= max_sources:
+                        return urls
+    return urls
+
+
+def format_sources_block(urls: List[str]) -> str:
+    if not urls:
+        return ""
+    lines = "\n".join(f"- {u}" for u in urls)
+    return "\n\nQuellen:\n" + lines
+
+
 def create_response(
     client: OpenAI,
     model: str,
     prompt: str,
     max_output_tokens: int,
+    use_tools: bool = False,
+    include_sources: bool = False,
+    previous_response_id: Optional[str] = None,
 ) -> Any:
-    return client.responses.create(
-        model=model,
-        store=False,
-        input=prompt,
-        reasoning={"effort": "medium"},
-        tools=[{"type": "web_search"}],
-        tool_choice="auto",
-        include=["web_search_call.action.sources"],
-        max_output_tokens=max_output_tokens,
-    )
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "store": False,
+        "input": prompt,
+        "reasoning": {"effort": "medium"},
+        "max_output_tokens": max_output_tokens,
+    }
+    if previous_response_id:
+        kwargs["previous_response_id"] = previous_response_id
+    if use_tools:
+        kwargs["tools"] = [{"type": "web_search"}]
+        kwargs["tool_choice"] = "auto"
+        if include_sources:
+            kwargs["include"] = ["web_search_call.action.sources"]
+    return client.responses.create(**kwargs)
 
 
 def call_openai_text(
@@ -704,14 +730,16 @@ def call_openai_text(
     prompt: str,
     max_tokens: int,
     retry_max_tokens: int,
+    use_tools: bool = False,
+    include_sources: bool = False,
 ) -> Tuple[str, str]:
-    response = create_response(client, model, prompt, max_tokens)
+    response = create_response(client, model, prompt, max_tokens, use_tools=use_tools, include_sources=include_sources)
     text = extract_response_text(response)
     if text:
         return text, response_debug_meta(response)
 
     if response_incomplete_reason(response) == "max_output_tokens" and retry_max_tokens > max_tokens:
-        retry = create_response(client, model, prompt, retry_max_tokens)
+        retry = create_response(client, model, prompt, retry_max_tokens, use_tools=use_tools, include_sources=include_sources)
         retry_text = extract_response_text(retry)
         if retry_text:
             return retry_text, response_debug_meta(retry)
@@ -756,12 +784,31 @@ def create_openai_reply(
             + reply_text
         )
 
-    response = create_response(client, model, prompt, 220)
-    if response_incomplete_reason(response) == "max_output_tokens":
-        response = create_response(client, model, prompt, 420)
-    response_json = serialize_response_json(response)
+    response = create_response(client, model, prompt, 220, use_tools=True, include_sources=True)
+    sources = extract_web_sources(response)
     extracted_text = extract_response_text(response)
-    return response_json, response_debug_meta(response), extracted_text
+    if extracted_text:
+        posted_text = extracted_text + format_sources_block(sources)
+        return posted_text, f"{response_debug_meta(response)} sources={len(sources)}", extracted_text
+
+    if response_incomplete_reason(response) == "max_output_tokens":
+        follow_prompt = "Provide the final user-facing reply text now. Keep it short and do not call tools."
+        response_follow = create_response(
+            client,
+            model,
+            follow_prompt,
+            420,
+            use_tools=False,
+            include_sources=False,
+            previous_response_id=get_field(response, "id"),
+        )
+        follow_text = extract_response_text(response_follow)
+        if follow_text:
+            posted_text = follow_text + format_sources_block(sources)
+            return posted_text, f"{response_debug_meta(response_follow)} sources={len(sources)}", follow_text
+        return "", f"{response_debug_meta(response_follow)} sources={len(sources)} {response_output_debug(response_follow)}", ""
+
+    return "", f"{response_debug_meta(response)} sources={len(sources)} {response_output_debug(response)}", ""
 
 
 def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> Tuple[str, str]:
@@ -776,7 +823,7 @@ def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: in
         "\n\nTask: Produce one short ambient comment."
     )
 
-    return call_openai_text(client, model, prompt, max_tokens=100, retry_max_tokens=180)
+    return call_openai_text(client, model, prompt, max_tokens=100, retry_max_tokens=180, use_tools=False, include_sources=False)
 
 
 def create_updated_memory(
@@ -963,7 +1010,6 @@ def handle_message(
             )
             register_reply_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
-            logging.info("OpenAI full reply response chat=%s msg=%d %s", mask_chat_id(chat_id), msg_id, response_payload)
             updated_memory, memory_meta = create_updated_memory(
                 client,
                 options["openai_model"],
