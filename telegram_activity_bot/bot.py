@@ -16,6 +16,8 @@ STATE_PATH = "/data/state.json"
 CONFIG_DIR = "/config"
 POLL_TIMEOUT_SECONDS = 25
 AMBIENT_TICK_SECONDS = 10
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_CHUNK_SIZE = 3900
 MAX_ACTIVITY_ENTRIES_PER_CHAT = 10000
 MAX_STYLE_CHARS = 20000
 MAX_MEMORY_CHARS = 5000
@@ -590,6 +592,24 @@ def extract_response_text(response: Any) -> str:
     return ""
 
 
+def serialize_response_json(response: Any) -> str:
+    try:
+        if hasattr(response, "model_dump"):
+            payload = response.model_dump()
+        elif hasattr(response, "to_dict"):
+            payload = response.to_dict()
+        elif isinstance(response, dict):
+            payload = response
+        else:
+            payload = response
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        try:
+            return str(response)
+        except Exception:
+            return ""
+
+
 def response_debug_meta(response: Any) -> str:
     status = get_field(response, "status")
     status_str = status if isinstance(status, str) and status else "unknown"
@@ -709,7 +729,7 @@ def create_openai_reply(
     mention_text: str,
     reply_sender_name: str,
     reply_text: str,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, str]:
     mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
     reply_text = clamp_text(reply_text, MAX_REPLY_CONTEXT_CHARS)
 
@@ -736,7 +756,12 @@ def create_openai_reply(
             + reply_text
         )
 
-    return call_openai_text(client, model, prompt, max_tokens=220, retry_max_tokens=420)
+    response = create_response(client, model, prompt, 220)
+    if response_incomplete_reason(response) == "max_output_tokens":
+        response = create_response(client, model, prompt, 420)
+    response_json = serialize_response_json(response)
+    extracted_text = extract_response_text(response)
+    return response_json, response_debug_meta(response), extracted_text
 
 
 def create_openai_ambient(client: OpenAI, model: str, style_text: str, count: int, msgs_per_min: float) -> Tuple[str, str]:
@@ -839,6 +864,21 @@ def telegram_send_message(token: str, chat_id: int, text: str, reply_to_message_
         raise RuntimeError("Telegram sendMessage returned not ok")
 
 
+def telegram_send_message_chunks(token: str, chat_id: int, text: str, reply_to_message_id: Optional[int] = None) -> None:
+    if not text:
+        return
+    if len(text) <= TELEGRAM_TEXT_LIMIT:
+        telegram_send_message(token, chat_id, text, reply_to_message_id=reply_to_message_id)
+        return
+
+    parts = [text[i : i + TELEGRAM_CHUNK_SIZE] for i in range(0, len(text), TELEGRAM_CHUNK_SIZE)]
+    for idx, part in enumerate(parts):
+        if idx == 0:
+            telegram_send_message(token, chat_id, part, reply_to_message_id=reply_to_message_id)
+        else:
+            telegram_send_message(token, chat_id, part)
+
+
 def telegram_get_me(token: str) -> Dict[str, Any]:
     url = f"https://api.telegram.org/bot{token}/getMe"
     resp = requests.get(url, timeout=15)
@@ -904,7 +944,7 @@ def handle_message(
     try:
         style_text = style_cache_reply.get()
         memory_text = load_memory_text()
-        response_text, response_meta = create_openai_reply(
+        response_payload, response_meta, response_text = create_openai_reply(
             client,
             options["openai_model"],
             style_text,
@@ -914,15 +954,16 @@ def handle_message(
             reply_sender_name,
             reply_text,
         )
-        if response_text:
-            telegram_send_message(
+        if response_payload:
+            telegram_send_message_chunks(
                 options["telegram_bot_token"],
                 chat_id,
-                response_text,
+                response_payload,
                 reply_to_message_id=message.get("message_id"),
             )
             register_reply_post(chat_state, now_ts)
             logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
+            logging.info("OpenAI full reply response chat=%s msg=%d %s", mask_chat_id(chat_id), msg_id, response_payload)
             updated_memory, memory_meta = create_updated_memory(
                 client,
                 options["openai_model"],
