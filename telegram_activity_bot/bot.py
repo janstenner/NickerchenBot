@@ -609,6 +609,47 @@ def response_debug_meta(response: Any) -> str:
     return f"status={status_str} output_items={output_count}"
 
 
+def response_output_debug(response: Any, max_items: int = 5) -> str:
+    output = get_field(response, "output")
+    if not isinstance(output, list):
+        return "output_summary=none"
+
+    chunks: List[str] = []
+    for idx, item in enumerate(output[:max_items]):
+        item_type = get_field(item, "type")
+        item_type_str = item_type if isinstance(item_type, str) and item_type else "unknown"
+
+        content = get_field(item, "content")
+        content_count = len(content) if isinstance(content, list) else 0
+        content_types: List[str] = []
+        text_blocks = 0
+        text_chars = 0
+        if isinstance(content, list):
+            for block in content:
+                block_type = get_field(block, "type")
+                if isinstance(block_type, str) and block_type:
+                    content_types.append(block_type)
+                text_val = extract_text_value(get_field(block, "text"))
+                if text_val:
+                    text_blocks += 1
+                    text_chars += len(text_val)
+
+        action = get_field(item, "action")
+        action_sources = get_field(action, "sources")
+        source_count = len(action_sources) if isinstance(action_sources, list) else 0
+
+        uniq_types = sorted(set(content_types))
+        type_fragment = ",".join(uniq_types[:3]) if uniq_types else "-"
+        chunks.append(
+            f"{idx}:{item_type_str}(content={content_count},text_blocks={text_blocks},text_chars={text_chars},types={type_fragment},sources={source_count})"
+        )
+
+    if len(output) > max_items:
+        chunks.append(f"+{len(output)-max_items}more")
+
+    return "output_summary=" + ";".join(chunks)
+
+
 def response_incomplete_reason(response: Any) -> str:
     incomplete = get_field(response, "incomplete_details")
     if incomplete is None:
@@ -654,9 +695,9 @@ def call_openai_text(
         retry_text = extract_response_text(retry)
         if retry_text:
             return retry_text, response_debug_meta(retry)
-        return "", response_debug_meta(retry)
+        return "", f"{response_debug_meta(retry)} {response_output_debug(retry)}"
 
-    return "", response_debug_meta(response)
+    return "", f"{response_debug_meta(response)} {response_output_debug(response)}"
 
 
 def create_openai_reply(
