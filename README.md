@@ -3,23 +3,24 @@
 This repository contains a Home Assistant OS App (Add-on) that runs a Telegram bot with:
 
 - Telegram Bot API long polling (`getUpdates` with persisted `offset`)
-- OpenAI Responses API using configurable `openai_model` (default `gpt-5.2-chat-latest`) and `store=false`
+- OpenAI Responses API using configurable `openai_model` (default `gpt-5.2`) and `store=false`
 - Strict storage minimization: only activity timestamps are persisted by default
-- Optional Mention/Reply responses, plus optional ambient comments based on activity counts only
+- Queue-driven reply responses, plus optional ambient comments based on activity counts only
 
 ## What the bot does
 
 - Tracks message activity in allowed group chats as timestamp-only metrics.
-- Detects direct `@mention` and replies to bot messages.
-- Generates replies only for mention/reply events (if enabled).
+- Collects all incoming group messages in an in-memory queue (max 30) with usernames.
+- Sends a reply immediately on `@mention` or reply-to-bot events.
+- Otherwise sends a reply when queue timer conditions are met (>2 minutes since first post-call queue element, with at least 2 new messages).
 - Optionally posts short ambient comments based on activity level, without using chat content.
 - Reloads separate style/rule notes from `/config/style_post.md` and `/config/style_reply.md` (or configured filenames) at runtime.
-- Maintains `/config/memory.md` (max 2000 chars) for persistent bot memory used in replies, including the latest ambient post.
+- Maintains `/config/memory.md` (max 5000 chars) for persistent bot memory used in replies, including the latest ambient post.
 
 ## What the bot does not do
 
 - It does not persist non-mentioned chat message text.
-- It does not call OpenAI for regular background messages.
+- Queue message text is kept in-memory only (not persisted to `/data/state.json`).
 - It does not use local tools, shell execution, or files outside `/data` and `/config`.
 - It does not log Telegram message text, prompt text, or API keys.
 
@@ -27,8 +28,8 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 
 - Persistent state file: `/data/state.json`
 - Stored data per chat: activity timestamps, last bot post timestamp, optional day counter
-- Mention/reply text is used in-memory for immediate response generation only
-- Mention/reply context is hard-limited in size before OpenAI calls
+- Message queue context is in-memory only (max 30 entries, includes usernames, not persisted)
+- Queue context is hard-limited in size before OpenAI calls
 - OpenAI responses are requested with `store=false`
 
 ## Telegram requirements (important)

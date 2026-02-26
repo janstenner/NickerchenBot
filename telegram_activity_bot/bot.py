@@ -16,14 +16,18 @@ STATE_PATH = "/data/state.json"
 CONFIG_DIR = "/config"
 POLL_TIMEOUT_SECONDS = 25
 AMBIENT_TICK_SECONDS = 10
-TELEGRAM_TEXT_LIMIT = 4096
-TELEGRAM_CHUNK_SIZE = 3900
+TELEGRAM_TEXT_LIMIT = 8000
+TELEGRAM_CHUNK_SIZE = 7900
 MAX_ACTIVITY_ENTRIES_PER_CHAT = 10000
 MAX_STYLE_CHARS = 20000
 MAX_MEMORY_CHARS = 5000
-MAX_MENTION_CONTEXT_CHARS = 1000
-MAX_REPLY_CONTEXT_CHARS = 500
+MAX_MENTION_CONTEXT_CHARS = 10000
+MAX_REPLY_CONTEXT_CHARS = 8000
 MAX_AMBIENT_MEMORY_CHARS = 600
+REPLY_CONTEXT_QUEUE_MAX_ITEMS = 30
+REPLY_CONTEXT_TRIGGER_SECONDS = 120
+MAX_REPLY_QUEUE_ENTRY_CHARS = 280
+MAX_REPLY_QUEUE_CONTEXT_CHARS = 10000
 MEMORY_FILENAME = "memory.md"
 LAST_AMBIENT_HEADER = "## Last Ambient Post"
 NICKS_FILENAME = "nicks.md"
@@ -112,7 +116,7 @@ def load_options() -> Dict[str, Any]:
     defaults: Dict[str, Any] = {
         "telegram_bot_token": "",
         "openai_api_key": "",
-        "openai_model": "gpt-5.2-chat-latest",
+        "openai_model": "gpt-5.2",
         "allowed_chat_ids": "",
         "admin_user_ids": "",
         "bot_username": "",
@@ -121,7 +125,7 @@ def load_options() -> Dict[str, Any]:
         "style_reload_seconds": 60,
         "activity_window_seconds": 300,
         "activity_min_msgs_per_window": 3,
-        "ambient_enabled": True,
+        "ambient_enabled": False,
         "min_seconds_between_posts": 120,
         "max_posts_per_day": 0,
         "reply_on_mention": True,
@@ -142,9 +146,7 @@ def load_options() -> Dict[str, Any]:
     merged["allowed_chat_ids"] = parse_csv_ints(str(merged.get("allowed_chat_ids", "")))
     merged["admin_user_ids"] = parse_csv_ints(str(merged.get("admin_user_ids", "")))
     merged["bot_username"] = normalize_bot_username(str(merged.get("bot_username", "")))
-    merged["openai_model"] = (
-        str(merged.get("openai_model", "gpt-5.2-chat-latest")).strip() or "gpt-5.2-chat-latest"
-    )
+    merged["openai_model"] = str(merged.get("openai_model", "gpt-5.2")).strip() or "gpt-5.2"
     legacy_style_filename = os.path.basename(str(merged.get("style_filename", "")) or "")
     default_post_style = legacy_style_filename or "style_post.md"
     default_reply_style = legacy_style_filename or "style_reply.md"
@@ -158,7 +160,7 @@ def load_options() -> Dict[str, Any]:
     merged["style_reload_seconds"] = max(5, int(merged.get("style_reload_seconds", 60)))
     merged["activity_window_seconds"] = max(10, int(merged.get("activity_window_seconds", 300)))
     merged["activity_min_msgs_per_window"] = max(1, int(merged.get("activity_min_msgs_per_window", 3)))
-    merged["ambient_enabled"] = parse_bool(merged.get("ambient_enabled", True), True)
+    merged["ambient_enabled"] = parse_bool(merged.get("ambient_enabled", False), False)
     merged["min_seconds_between_posts"] = max(0, int(merged.get("min_seconds_between_posts", 120)))
     merged["max_posts_per_day"] = max(0, int(merged.get("max_posts_per_day", 0)))
     merged["reply_on_mention"] = parse_bool(merged.get("reply_on_mention", True), True)
@@ -368,6 +370,90 @@ def sender_label(message: Optional[Dict[str, Any]]) -> str:
     if isinstance(user_id, int):
         return f"id:{user_id}"
     return "unknown"
+
+
+def default_reply_queue_state() -> Dict[str, Any]:
+    return {
+        "items": [],
+        "window_start_ts": 0,
+        "messages_since_window_start": 0,
+        "last_api_call_ts": 0,
+    }
+
+
+def get_reply_queue_state(runtime_state: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
+    queues = runtime_state.setdefault("reply_queues", {})
+    if not isinstance(queues, dict):
+        queues = {}
+        runtime_state["reply_queues"] = queues
+
+    key = str(chat_id)
+    queue_state = queues.get(key)
+    if not isinstance(queue_state, dict):
+        queue_state = default_reply_queue_state()
+        queues[key] = queue_state
+
+    items = queue_state.get("items")
+    if not isinstance(items, list):
+        queue_state["items"] = []
+    if "window_start_ts" not in queue_state:
+        queue_state["window_start_ts"] = 0
+    if "messages_since_window_start" not in queue_state:
+        queue_state["messages_since_window_start"] = 0
+    if "last_api_call_ts" not in queue_state:
+        queue_state["last_api_call_ts"] = 0
+
+    return queue_state
+
+
+def normalize_queue_text(text: str) -> str:
+    collapsed = " ".join((text or "").split())
+    if not collapsed:
+        return "(no text)"
+    return clamp_text(collapsed, MAX_REPLY_QUEUE_ENTRY_CHARS)
+
+
+def append_reply_queue_entry(queue_state: Dict[str, Any], sender_name: str, text: str, now_ts: int) -> None:
+    items = queue_state["items"]
+    entry = f"{sender_name or 'unknown'}: {normalize_queue_text(text)}"
+    items.append(entry)
+    if len(items) > REPLY_CONTEXT_QUEUE_MAX_ITEMS:
+        queue_state["items"] = items[-REPLY_CONTEXT_QUEUE_MAX_ITEMS:]
+
+    if int(queue_state.get("window_start_ts", 0) or 0) <= 0:
+        queue_state["window_start_ts"] = now_ts
+        queue_state["messages_since_window_start"] = 1
+    else:
+        queue_state["messages_since_window_start"] = int(queue_state.get("messages_since_window_start", 0) or 0) + 1
+
+
+def reply_queue_age_seconds(queue_state: Dict[str, Any], now_ts: int) -> int:
+    start_ts = int(queue_state.get("window_start_ts", 0) or 0)
+    if start_ts <= 0:
+        return 0
+    return max(0, now_ts - start_ts)
+
+
+def should_send_by_queue_timer(queue_state: Dict[str, Any], now_ts: int) -> Tuple[bool, str]:
+    age = reply_queue_age_seconds(queue_state, now_ts)
+    since_start = int(queue_state.get("messages_since_window_start", 0) or 0)
+    if since_start >= 2 and age > REPLY_CONTEXT_TRIGGER_SECONDS:
+        return True, f"queue_age({age}s)"
+    return False, f"queue_wait(age={age}s,count={since_start})"
+
+
+def render_reply_queue_context(queue_state: Dict[str, Any]) -> str:
+    items = queue_state.get("items")
+    if not isinstance(items, list) or not items:
+        return ""
+    lines = [f"{idx + 1}. {item}" for idx, item in enumerate(items)]
+    return clamp_text("\n".join(lines), MAX_REPLY_QUEUE_CONTEXT_CHARS)
+
+
+def mark_reply_api_call(queue_state: Dict[str, Any], now_ts: int) -> None:
+    queue_state["last_api_call_ts"] = now_ts
+    queue_state["window_start_ts"] = 0
+    queue_state["messages_since_window_start"] = 0
 
 
 def memory_file_path() -> str:
@@ -750,13 +836,13 @@ def create_openai_reply(
     model: str,
     style_text: str,
     memory_text: str,
-    sender_name: str,
-    mention_text: str,
-    reply_sender_name: str,
-    reply_text: str,
+    queue_context: str,
+    latest_sender_name: str,
+    latest_message_text: str,
+    trigger_reason: str,
 ) -> Tuple[str, str, str]:
-    mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
-    reply_text = clamp_text(reply_text, MAX_REPLY_CONTEXT_CHARS)
+    queue_context = clamp_text(queue_context, MAX_REPLY_QUEUE_CONTEXT_CHARS)
+    latest_message_text = clamp_text(latest_message_text, MAX_MENTION_CONTEXT_CHARS)
 
     prompt = (
         "You are a concise Telegram group assistant. "
@@ -766,20 +852,16 @@ def create_openai_reply(
         f"{style_text or '(none)'}"
         f"\n\nPersistent memory notes (max {MAX_MEMORY_CHARS} chars):\n"
         f"{memory_text or '(empty)'}"
-        "\n\nTask: Reply to the user message."
-        "\nSender:\n"
-        f"{sender_name or 'unknown'}"
-        "\nUser message:\n"
-        f"{mention_text or '(empty)'}"
+        "\n\nTask: Reply to the latest user message using the queue context."
+        "\nTrigger reason:\n"
+        f"{trigger_reason or 'unknown'}"
+        "\n\nLatest sender:\n"
+        f"{latest_sender_name or 'unknown'}"
+        "\nLatest user message:\n"
+        f"{latest_message_text or '(empty)'}"
+        "\n\nRecent queue (oldest to newest, includes usernames):\n"
+        f"{queue_context or '(empty)'}"
     )
-
-    if reply_text:
-        prompt += (
-            "\n\nReplied-to sender:\n"
-            + (reply_sender_name or "unknown")
-            + "\nReplied-to message:\n"
-            + reply_text
-        )
 
     response = create_response(client, model, prompt, 220, use_tools=True, include_sources=True)
     sources = extract_web_sources(response)
@@ -836,10 +918,12 @@ def create_updated_memory(
     reply_sender_name: str,
     reply_text: str,
     bot_reply_text: str,
+    queue_context: str = "",
 ) -> Tuple[str, str]:
     mention_text = clamp_text(mention_text, MAX_MENTION_CONTEXT_CHARS)
     reply_text = clamp_text(reply_text, MAX_REPLY_CONTEXT_CHARS)
     bot_reply_text = clamp_text(bot_reply_text, 400)
+    queue_context = clamp_text(queue_context, MAX_REPLY_QUEUE_CONTEXT_CHARS)
 
     prompt = (
         "You maintain a short markdown memory for a Telegram bot. "
@@ -865,6 +949,9 @@ def create_updated_memory(
             + "\nReplied-to message:\n"
             + reply_text
         )
+
+    if queue_context:
+        prompt += "\n\nRecent queue context (oldest to newest):\n" + queue_context
 
     prompt += "\nBot reply:\n" + (bot_reply_text or "(empty)")
 
@@ -943,6 +1030,7 @@ def telegram_get_me(token: str) -> Dict[str, Any]:
 def handle_message(
     message: Dict[str, Any],
     state: Dict[str, Any],
+    runtime_state: Dict[str, Any],
     options: Dict[str, Any],
     style_cache_reply: StyleCache,
     client: OpenAI,
@@ -963,43 +1051,62 @@ def handle_message(
     logging.info("Activity chat=%s count=%d per_min=%.2f", mask_chat_id(chat_id), count, per_min)
 
     text = message_text(message)
+    sender_name = sender_label(message)
+    queue_state = get_reply_queue_state(runtime_state, chat_id)
+    append_reply_queue_entry(queue_state, sender_name, text, now_ts)
+    queue_age = reply_queue_age_seconds(queue_state, now_ts)
+    queue_len = len(queue_state.get("items", []))
+
     mentioned = is_mention(text, options["bot_username"])
     replied = is_reply_to_bot(message, options["bot_username"])
     msg_id = int(message.get("message_id", 0) or 0)
     logging.info(
-        "Message flags chat=%s msg=%d mention=%s reply_to_bot=%s reply_enabled=%s",
+        "Message flags chat=%s msg=%d mention=%s reply_to_bot=%s reply_enabled=%s queue_len=%d queue_age=%ds",
         mask_chat_id(chat_id),
         msg_id,
         mentioned,
         replied,
         options["reply_on_mention"],
+        queue_len,
+        queue_age,
     )
 
     if not options["reply_on_mention"]:
         logging.info("Skip reply chat=%s msg=%d reason=reply_disabled", mask_chat_id(chat_id), msg_id)
         return True
 
-    if not (mentioned or replied):
-        logging.info("Skip reply chat=%s msg=%d reason=no_mention_or_reply", mask_chat_id(chat_id), msg_id)
+    trigger_reason = ""
+    if mentioned or replied:
+        trigger_reason = "mention_or_reply"
+    else:
+        should_send, trigger_reason = should_send_by_queue_timer(queue_state, now_ts)
+        if not should_send:
+            logging.info("Skip reply chat=%s msg=%d reason=%s", mask_chat_id(chat_id), msg_id, trigger_reason)
+            return True
+
+    queue_context = render_reply_queue_context(queue_state)
+    if not queue_context:
+        logging.info("Skip reply chat=%s msg=%d reason=empty_queue_context", mask_chat_id(chat_id), msg_id)
         return True
 
     reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
     reply_text = message_text(reply_msg) if reply_msg else ""
-    sender_name = sender_label(message)
     reply_sender_name = sender_label(reply_msg)
 
+    api_called = False
     try:
         style_text = style_cache_reply.get()
         memory_text = load_memory_text()
+        api_called = True
         response_payload, response_meta, response_text = create_openai_reply(
             client,
             options["openai_model"],
             style_text,
             memory_text,
+            queue_context,
             sender_name,
             text,
-            reply_sender_name,
-            reply_text,
+            trigger_reason,
         )
         if response_payload:
             telegram_send_message_chunks(
@@ -1009,7 +1116,12 @@ def handle_message(
                 reply_to_message_id=message.get("message_id"),
             )
             register_reply_post(chat_state, now_ts)
-            logging.info("Mention/Reply response posted chat=%s", mask_chat_id(chat_id))
+            logging.info(
+                "Reply response posted chat=%s reason=%s queue_len=%d",
+                mask_chat_id(chat_id),
+                trigger_reason,
+                queue_len,
+            )
             updated_memory, memory_meta = create_updated_memory(
                 client,
                 options["openai_model"],
@@ -1020,6 +1132,7 @@ def handle_message(
                 reply_sender_name,
                 reply_text,
                 response_text,
+                queue_context=queue_context,
             )
             last_ambient_post = extract_last_ambient_from_memory(memory_text)
             if last_ambient_post:
@@ -1045,6 +1158,9 @@ def handle_message(
             )
     except Exception as exc:
         logging.error("Mention/Reply processing failed: %s", summarize_exception(exc))
+    finally:
+        if api_called:
+            mark_reply_api_call(queue_state, now_ts)
 
     return True
 
@@ -1175,6 +1291,7 @@ def run() -> None:
     )
 
     state = load_state()
+    runtime_state: Dict[str, Any] = {}
     style_cache_post = StyleCache(options["style_post_filename"], options["style_reload_seconds"])
     style_cache_reply = StyleCache(options["style_reply_filename"], options["style_reload_seconds"])
     client = OpenAI(api_key=options["openai_api_key"])
@@ -1205,7 +1322,7 @@ def run() -> None:
 
                     message = update.get("message")
                     if isinstance(message, dict):
-                        if handle_message(message, state, options, style_cache_reply, client):
+                        if handle_message(message, state, runtime_state, options, style_cache_reply, client):
                             state_changed = True
 
             if time.time() >= next_ambient_ts:
