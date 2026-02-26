@@ -748,7 +748,7 @@ def response_incomplete_reason(response: Any) -> str:
     return ""
 
 
-def extract_web_sources(response: Any, max_sources: int = 4) -> List[str]:
+def extract_web_sources(response: Any, max_sources: int = 2) -> List[str]:
     output = get_field(response, "output")
     if not isinstance(output, list):
         return []
