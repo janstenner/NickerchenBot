@@ -1,5 +1,5 @@
 name: Telegram Activity Bot
-version: 0.1.23
+version: 0.1.26
 slug: telegram_activity_bot
 description: Telegram group activity bot with privacy-first behavior and optional ambient comments.
 url: https://github.com/yourname/haos-telegram-activity-bot

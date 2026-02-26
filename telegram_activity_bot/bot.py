@@ -18,6 +18,7 @@ POLL_TIMEOUT_SECONDS = 25
 AMBIENT_TICK_SECONDS = 10
 TELEGRAM_TEXT_LIMIT = 8000
 TELEGRAM_CHUNK_SIZE = 7900
+TELEGRAM_API_TEXT_LIMIT = 4096
 MAX_ACTIVITY_ENTRIES_PER_CHAT = 10000
 MAX_STYLE_CHARS = 20000
 MAX_MEMORY_CHARS = 5000
@@ -375,8 +376,7 @@ def sender_label(message: Optional[Dict[str, Any]]) -> str:
 def default_reply_queue_state() -> Dict[str, Any]:
     return {
         "items": [],
-        "window_start_ts": 0,
-        "messages_since_window_start": 0,
+        "messages_since_api_call": 0,
         "last_api_call_ts": 0,
     }
 
@@ -396,10 +396,8 @@ def get_reply_queue_state(runtime_state: Dict[str, Any], chat_id: int) -> Dict[s
     items = queue_state.get("items")
     if not isinstance(items, list):
         queue_state["items"] = []
-    if "window_start_ts" not in queue_state:
-        queue_state["window_start_ts"] = 0
-    if "messages_since_window_start" not in queue_state:
-        queue_state["messages_since_window_start"] = 0
+    if "messages_since_api_call" not in queue_state:
+        queue_state["messages_since_api_call"] = 0
     if "last_api_call_ts" not in queue_state:
         queue_state["last_api_call_ts"] = 0
 
@@ -420,26 +418,26 @@ def append_reply_queue_entry(queue_state: Dict[str, Any], sender_name: str, text
     if len(items) > REPLY_CONTEXT_QUEUE_MAX_ITEMS:
         queue_state["items"] = items[-REPLY_CONTEXT_QUEUE_MAX_ITEMS:]
 
-    if int(queue_state.get("window_start_ts", 0) or 0) <= 0:
-        queue_state["window_start_ts"] = now_ts
-        queue_state["messages_since_window_start"] = 1
-    else:
-        queue_state["messages_since_window_start"] = int(queue_state.get("messages_since_window_start", 0) or 0) + 1
+    if int(queue_state.get("last_api_call_ts", 0) or 0) <= 0:
+        queue_state["last_api_call_ts"] = now_ts
+    queue_state["messages_since_api_call"] = int(queue_state.get("messages_since_api_call", 0) or 0) + 1
 
 
 def reply_queue_age_seconds(queue_state: Dict[str, Any], now_ts: int) -> int:
-    start_ts = int(queue_state.get("window_start_ts", 0) or 0)
-    if start_ts <= 0:
+    last_api_call_ts = int(queue_state.get("last_api_call_ts", 0) or 0)
+    if last_api_call_ts <= 0:
         return 0
-    return max(0, now_ts - start_ts)
+    return max(0, now_ts - last_api_call_ts)
 
 
 def should_send_by_queue_timer(queue_state: Dict[str, Any], now_ts: int) -> Tuple[bool, str]:
     age = reply_queue_age_seconds(queue_state, now_ts)
-    since_start = int(queue_state.get("messages_since_window_start", 0) or 0)
-    if since_start >= 2 and age > REPLY_CONTEXT_TRIGGER_SECONDS:
-        return True, f"queue_age({age}s)"
-    return False, f"queue_wait(age={age}s,count={since_start})"
+    newer_count = int(queue_state.get("messages_since_api_call", 0) or 0)
+    if age <= REPLY_CONTEXT_TRIGGER_SECONDS:
+        return False, f"queue_wait(age={age}s,newer={newer_count})"
+    if newer_count <= 3:
+        return False, f"queue_wait_few_messages(age={age}s,newer={newer_count})"
+    return True, f"queue_age({age}s,newer={newer_count})"
 
 
 def render_reply_queue_context(queue_state: Dict[str, Any]) -> str:
@@ -452,8 +450,7 @@ def render_reply_queue_context(queue_state: Dict[str, Any]) -> str:
 
 def mark_reply_api_call(queue_state: Dict[str, Any], now_ts: int) -> None:
     queue_state["last_api_call_ts"] = now_ts
-    queue_state["window_start_ts"] = 0
-    queue_state["messages_since_window_start"] = 0
+    queue_state["messages_since_api_call"] = 0
 
 
 def memory_file_path() -> str:
@@ -863,32 +860,37 @@ def create_openai_reply(
         f"{queue_context or '(empty)'}"
     )
 
-    response = create_response(client, model, prompt, 220, use_tools=True, include_sources=True)
+    response = create_response(client, model, prompt, 1000, use_tools=True, include_sources=True)
     sources = extract_web_sources(response)
     extracted_text = extract_response_text(response)
-    if extracted_text:
-        posted_text = extracted_text + format_sources_block(sources)
-        return posted_text, f"{response_debug_meta(response)} sources={len(sources)}", extracted_text
 
     if response_incomplete_reason(response) == "max_output_tokens":
         follow_prompt = (
             prompt
-            + "\n\nNow provide only the final user-facing reply text. "
+            + "\n\nYour previous response was cut due to token limit. "
+            + "Now provide only the complete final user-facing reply text. "
             + "Keep it short and do not call tools."
         )
         follow_text, follow_meta = call_openai_text(
             client,
             model,
             follow_prompt,
-            max_tokens=420,
-            retry_max_tokens=520,
+            max_tokens=900,
+            retry_max_tokens=1200,
             use_tools=False,
             include_sources=False,
         )
         if follow_text:
             posted_text = follow_text + format_sources_block(sources)
             return posted_text, f"{follow_meta} sources={len(sources)}", follow_text
+        if extracted_text:
+            posted_text = extracted_text + format_sources_block(sources)
+            return posted_text, f"{follow_meta} sources={len(sources)} truncated_fallback=true", extracted_text
         return "", f"{follow_meta} sources={len(sources)}", ""
+
+    if extracted_text:
+        posted_text = extracted_text + format_sources_block(sources)
+        return posted_text, f"{response_debug_meta(response)} sources={len(sources)}", extracted_text
 
     return "", f"{response_debug_meta(response)} sources={len(sources)} {response_output_debug(response)}", ""
 
@@ -1001,11 +1003,14 @@ def telegram_send_message(token: str, chat_id: int, text: str, reply_to_message_
 def telegram_send_message_chunks(token: str, chat_id: int, text: str, reply_to_message_id: Optional[int] = None) -> None:
     if not text:
         return
-    if len(text) <= TELEGRAM_TEXT_LIMIT:
+    effective_limit = min(TELEGRAM_TEXT_LIMIT, TELEGRAM_API_TEXT_LIMIT)
+    effective_chunk = min(TELEGRAM_CHUNK_SIZE, max(1, effective_limit - 100))
+
+    if len(text) <= effective_limit:
         telegram_send_message(token, chat_id, text, reply_to_message_id=reply_to_message_id)
         return
 
-    parts = [text[i : i + TELEGRAM_CHUNK_SIZE] for i in range(0, len(text), TELEGRAM_CHUNK_SIZE)]
+    parts = [text[i : i + effective_chunk] for i in range(0, len(text), effective_chunk)]
     for idx, part in enumerate(parts):
         if idx == 0:
             telegram_send_message(token, chat_id, part, reply_to_message_id=reply_to_message_id)
