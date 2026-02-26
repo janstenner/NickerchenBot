@@ -793,7 +793,7 @@ def create_response(
         "model": model,
         "store": False,
         "input": prompt,
-        "reasoning": {"effort": "medium"},
+        "reasoning": {"effort": "low"},
         "max_output_tokens": max_output_tokens,
     }
     if use_tools:

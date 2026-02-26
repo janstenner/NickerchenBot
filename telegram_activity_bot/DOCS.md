@@ -49,8 +49,8 @@ Mention behavior:
 - Responses API with configurable `model` (`openai_model`, default `gpt-5.2`)
 - `store=false`
 - Short outputs (`max_output_tokens` kept small)
-- Reply calls use `reasoning={"effort":"medium"}` with `tools=[{"type":"web_search"}]`, `tool_choice="auto"`, and `include=["web_search_call.action.sources"]`
-- Ambient and memory-update calls keep `reasoning={"effort":"medium"}` but run without tools
+- Reply calls use `reasoning={"effort":"low"}` with `tools=[{"type":"web_search"}]`, `tool_choice="auto"`, and `include=["web_search_call.action.sources"]`
+- Ambient and memory-update calls keep `reasoning={"effort":"low"}` but run without tools
 
 ## Style file locations
 
