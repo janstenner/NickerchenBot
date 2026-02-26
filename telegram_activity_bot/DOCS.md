@@ -42,7 +42,7 @@ Mention behavior:
 - The bot stores numeric activity timestamps only for normal messages.
 - Reply context queue is in-memory only (not persisted): up to 30 latest messages including sender usernames.
 - Replies are generated from the full queue context. Immediate trigger on mention/reply; otherwise trigger when more than 2 minutes passed since first post-call queue element.
-- Persistent memory file: `/config/memory.md` (max 5000 chars), included in every reply context; it always keeps the latest ambient post under `## Last Ambient Post`.
+- Persistent memory file: `/config/memory.md` (max 50000 chars), included in every reply context; it always keeps the latest ambient post under `## Last Ambient Post`.
 
 ## OpenAI policy used
 

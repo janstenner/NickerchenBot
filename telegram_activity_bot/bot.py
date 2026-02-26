@@ -21,10 +21,10 @@ TELEGRAM_CHUNK_SIZE = 7900
 TELEGRAM_API_TEXT_LIMIT = 4096
 MAX_ACTIVITY_ENTRIES_PER_CHAT = 10000
 MAX_STYLE_CHARS = 20000
-MAX_MEMORY_CHARS = 5000
+MAX_MEMORY_CHARS = 50000
 MAX_MENTION_CONTEXT_CHARS = 10000
 MAX_REPLY_CONTEXT_CHARS = 8000
-MAX_AMBIENT_MEMORY_CHARS = 600
+MAX_AMBIENT_MEMORY_CHARS = 5000
 REPLY_CONTEXT_QUEUE_MAX_ITEMS = 30
 REPLY_CONTEXT_TRIGGER_SECONDS = 120
 MAX_REPLY_QUEUE_ENTRY_CHARS = 280
@@ -748,7 +748,7 @@ def response_incomplete_reason(response: Any) -> str:
     return ""
 
 
-def extract_web_sources(response: Any, max_sources: int = 12) -> List[str]:
+def extract_web_sources(response: Any, max_sources: int = 4) -> List[str]:
     output = get_field(response, "output")
     if not isinstance(output, list):
         return []
@@ -957,7 +957,7 @@ def create_updated_memory(
 
     prompt += "\nBot reply:\n" + (bot_reply_text or "(empty)")
 
-    updated_text, meta = call_openai_text(client, model, prompt, max_tokens=240, retry_max_tokens=420)
+    updated_text, meta = call_openai_text(client, model, prompt, max_tokens=2500, retry_max_tokens=6000)
     return clamp_text(updated_text, MAX_MEMORY_CHARS).strip(), meta
 
 

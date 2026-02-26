@@ -15,7 +15,7 @@ This repository contains a Home Assistant OS App (Add-on) that runs a Telegram b
 - Otherwise sends a reply when queue timer conditions are met (>2 minutes since first post-call queue element, with at least 2 new messages).
 - Optionally posts short ambient comments based on activity level, without using chat content.
 - Reloads separate style/rule notes from `/config/style_post.md` and `/config/style_reply.md` (or configured filenames) at runtime.
-- Maintains `/config/memory.md` (max 5000 chars) for persistent bot memory used in replies, including the latest ambient post.
+- Maintains `/config/memory.md` (max 50000 chars) for persistent bot memory used in replies, including the latest ambient post.
 
 ## What the bot does not do
 
