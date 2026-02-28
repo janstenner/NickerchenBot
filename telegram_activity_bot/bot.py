@@ -411,9 +411,22 @@ def normalize_queue_text(text: str) -> str:
     return clamp_text(collapsed, MAX_REPLY_QUEUE_ENTRY_CHARS)
 
 
-def append_reply_queue_entry(queue_state: Dict[str, Any], sender_name: str, text: str, now_ts: int) -> None:
+def build_reply_queue_entry(message: Dict[str, Any]) -> Dict[str, Any]:
+    reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
+    return {
+        "message_id": int(message.get("message_id", 0) or 0),
+        "date_ts": int(message.get("date", 0) or 0),
+        "sender": sender_label(message),
+        "text": normalize_queue_text(message_text(message)),
+        "reply_to_message_id": int(reply_msg.get("message_id", 0) or 0) if reply_msg else 0,
+        "reply_to_sender": sender_label(reply_msg) if reply_msg else "",
+        "reply_to_text": normalize_queue_text(message_text(reply_msg)) if reply_msg else "",
+    }
+
+
+def append_reply_queue_entry(queue_state: Dict[str, Any], message: Dict[str, Any], now_ts: int) -> None:
     items = queue_state["items"]
-    entry = f"{sender_name or 'unknown'}: {normalize_queue_text(text)}"
+    entry = build_reply_queue_entry(message)
     items.append(entry)
     if len(items) > REPLY_CONTEXT_QUEUE_MAX_ITEMS:
         queue_state["items"] = items[-REPLY_CONTEXT_QUEUE_MAX_ITEMS:]
@@ -444,7 +457,32 @@ def render_reply_queue_context(queue_state: Dict[str, Any]) -> str:
     items = queue_state.get("items")
     if not isinstance(items, list) or not items:
         return ""
-    lines = [f"{idx + 1}. {item}" for idx, item in enumerate(items)]
+
+    lines: List[str] = []
+    for idx, item in enumerate(items):
+        if isinstance(item, dict):
+            sender = str(item.get("sender") or "unknown")
+            text = str(item.get("text") or "(no text)")
+            message_id = int(item.get("message_id", 0) or 0)
+            reply_to_message_id = int(item.get("reply_to_message_id", 0) or 0)
+            reply_to_sender = str(item.get("reply_to_sender") or "")
+            reply_to_text = str(item.get("reply_to_text") or "")
+
+            line = f"{idx + 1}. msg_id={message_id} sender={sender} text={text}"
+            if reply_to_message_id > 0:
+                target_sender = reply_to_sender or "unknown"
+                target_text = reply_to_text or "(no text)"
+                line += (
+                    f" | replies_to msg_id={reply_to_message_id}"
+                    f" sender={target_sender} text={target_text}"
+                )
+            else:
+                line += " | replies_to none"
+            lines.append(line)
+        else:
+            # Backward compatibility for old in-memory queue entries.
+            lines.append(f"{idx + 1}. {item}")
+
     return clamp_text("\n".join(lines), MAX_REPLY_QUEUE_CONTEXT_CHARS)
 
 
@@ -836,10 +874,14 @@ def create_openai_reply(
     queue_context: str,
     latest_sender_name: str,
     latest_message_text: str,
+    latest_reply_sender_name: str,
+    latest_reply_text: str,
+    latest_reply_message_id: int,
     trigger_reason: str,
 ) -> Tuple[str, str, str]:
     queue_context = clamp_text(queue_context, MAX_REPLY_QUEUE_CONTEXT_CHARS)
     latest_message_text = clamp_text(latest_message_text, MAX_MENTION_CONTEXT_CHARS)
+    latest_reply_text = clamp_text(latest_reply_text, MAX_REPLY_CONTEXT_CHARS)
 
     prompt = (
         "You are a concise Telegram group assistant. "
@@ -856,8 +898,16 @@ def create_openai_reply(
         f"{latest_sender_name or 'unknown'}"
         "\nLatest user message:\n"
         f"{latest_message_text or '(empty)'}"
+        "\nLatest message reply relation:\n"
+        f"reply_to_message_id={int(latest_reply_message_id or 0)}"
+        "\nReplied-to sender:\n"
+        f"{latest_reply_sender_name or '(none)'}"
+        "\nReplied-to message:\n"
+        f"{latest_reply_text or '(none)'}"
         "\n\nRecent queue (oldest to newest, includes usernames):\n"
         f"{queue_context or '(empty)'}"
+        "\n\nInstruction: Resolve who is being addressed based on reply relations."
+        " Do not act like you were addressed unless the latest message mentions or replies to the bot."
     )
 
     response = create_response(client, model, prompt, 1000, use_tools=True, include_sources=True)
@@ -1058,7 +1108,7 @@ def handle_message(
     text = message_text(message)
     sender_name = sender_label(message)
     queue_state = get_reply_queue_state(runtime_state, chat_id)
-    append_reply_queue_entry(queue_state, sender_name, text, now_ts)
+    append_reply_queue_entry(queue_state, message, now_ts)
     queue_age = reply_queue_age_seconds(queue_state, now_ts)
     queue_len = len(queue_state.get("items", []))
 
@@ -1097,6 +1147,7 @@ def handle_message(
     reply_msg = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else None
     reply_text = message_text(reply_msg) if reply_msg else ""
     reply_sender_name = sender_label(reply_msg)
+    reply_message_id = int(reply_msg.get("message_id", 0) or 0) if reply_msg else 0
 
     api_called = False
     try:
@@ -1111,14 +1162,20 @@ def handle_message(
             queue_context,
             sender_name,
             text,
+            reply_sender_name,
+            reply_text,
+            reply_message_id,
             trigger_reason,
         )
         if response_payload:
+            reply_to_message_id: Optional[int] = None
+            if trigger_reason == "mention_or_reply":
+                reply_to_message_id = int(message.get("message_id", 0) or 0) or None
             telegram_send_message_chunks(
                 options["telegram_bot_token"],
                 chat_id,
                 response_payload,
-                reply_to_message_id=message.get("message_id"),
+                reply_to_message_id=reply_to_message_id,
             )
             register_reply_post(chat_state, now_ts)
             logging.info(
